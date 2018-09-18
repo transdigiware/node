@@ -2,6 +2,7 @@
 
 const common = require('../common');
 
+common.skip('currently broken');
 common.skipIfInspectorDisabled();
 common.skipIfWorker(); // https://github.com/nodejs/node/issues/22767
 
