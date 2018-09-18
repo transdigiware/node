@@ -21,6 +21,7 @@
 #include "src/objects/intl-objects.h"
 #include "src/objects/js-locale-inl.h"
 #include "unicode/locid.h"
+#include "unicode/uloc.h"
 #include "unicode/unistr.h"
 #include "unicode/uvernum.h"
 #include "unicode/uversion.h"
@@ -139,17 +140,17 @@ bool PopulateLocaleWithUnicodeTags(Isolate* isolate, const char* icu_locale,
       if (bcp47_value) {
           Handle<String> bcp47_handle =
               factory->NewStringFromAsciiChecked(bcp47_value);
-          if (strncmp(bcp47_key, "kn", 2) == 0) {
+          if (strcmp(bcp47_key, "kn") == 0) {
             locale_holder->set_numeric(*bcp47_handle);
-          } else if (strncmp(bcp47_key, "ca", 2) == 0) {
+          } else if (strcmp(bcp47_key, "ca") == 0) {
             locale_holder->set_calendar(*bcp47_handle);
-          } else if (strncmp(bcp47_key, "kf", 2) == 0) {
+          } else if (strcmp(bcp47_key, "kf") == 0) {
             locale_holder->set_case_first(*bcp47_handle);
-          } else if (strncmp(bcp47_key, "co", 2) == 0) {
+          } else if (strcmp(bcp47_key, "co") == 0) {
             locale_holder->set_collation(*bcp47_handle);
-          } else if (strncmp(bcp47_key, "hc", 2) == 0) {
+          } else if (strcmp(bcp47_key, "hc") == 0) {
             locale_holder->set_hour_cycle(*bcp47_handle);
-          } else if (strncmp(bcp47_key, "nu", 2) == 0) {
+          } else if (strcmp(bcp47_key, "nu") == 0) {
             locale_holder->set_numbering_system(*bcp47_handle);
           }
       }
@@ -174,8 +175,14 @@ MaybeHandle<JSLocale> JSLocale::InitializeLocale(Isolate* isolate,
   char icu_result[ULOC_FULLNAME_CAPACITY];
   char icu_canonical[ULOC_FULLNAME_CAPACITY];
 
+  if (locale->length() == 0) {
+    THROW_NEW_ERROR(isolate, NewRangeError(MessageTemplate::kLocaleNotEmpty),
+                    JSLocale);
+  }
+
   v8::String::Utf8Value bcp47_locale(v8_isolate, v8::Utils::ToLocal(locale));
-  if (bcp47_locale.length() == 0) return MaybeHandle<JSLocale>();
+  CHECK_LT(0, bcp47_locale.length());
+  CHECK_NOT_NULL(*bcp47_locale);
 
   int icu_length = uloc_forLanguageTag(
       *bcp47_locale, icu_result, ULOC_FULLNAME_CAPACITY, nullptr, &status);
@@ -299,6 +306,51 @@ MaybeHandle<JSLocale> JSLocale::InitializeLocale(Isolate* isolate,
   locale_holder->set_locale(*locale_handle);
 
   return locale_holder;
+}
+
+namespace {
+
+Handle<String> MorphLocale(Isolate* isolate, String* language_tag,
+                           int32_t (*morph_func)(const char*, char*, int32_t,
+                                                 UErrorCode*)) {
+  Factory* factory = isolate->factory();
+  char localeBuffer[ULOC_FULLNAME_CAPACITY];
+  char morphBuffer[ULOC_FULLNAME_CAPACITY];
+
+  UErrorCode status = U_ZERO_ERROR;
+  // Convert from language id to locale.
+  int32_t parsed_length;
+  int32_t length =
+      uloc_forLanguageTag(language_tag->ToCString().get(), localeBuffer,
+                          ULOC_FULLNAME_CAPACITY, &parsed_length, &status);
+  CHECK(parsed_length == language_tag->length());
+  DCHECK(U_SUCCESS(status));
+  DCHECK_GT(length, 0);
+  DCHECK_NOT_NULL(morph_func);
+  // Add the likely subtags or Minimize the subtags on the locale id
+  length =
+      (*morph_func)(localeBuffer, morphBuffer, ULOC_FULLNAME_CAPACITY, &status);
+  DCHECK(U_SUCCESS(status));
+  DCHECK_GT(length, 0);
+  // Returns a well-formed language tag
+  length = uloc_toLanguageTag(morphBuffer, localeBuffer, ULOC_FULLNAME_CAPACITY,
+                              false, &status);
+  DCHECK(U_SUCCESS(status));
+  DCHECK_GT(length, 0);
+  std::string lang(localeBuffer, length);
+  std::replace(lang.begin(), lang.end(), '_', '-');
+
+  return factory->NewStringFromAsciiChecked(lang.c_str());
+}
+
+}  // namespace
+
+Handle<String> JSLocale::Maximize(Isolate* isolate, String* locale) {
+  return MorphLocale(isolate, locale, uloc_addLikelySubtags);
+}
+
+Handle<String> JSLocale::Minimize(Isolate* isolate, String* locale) {
+  return MorphLocale(isolate, locale, uloc_minimizeSubtags);
 }
 
 }  // namespace internal

@@ -702,14 +702,14 @@ void Deoptimizer::DoComputeOutputFrames() {
     caller_frame_top_ = stack_fp_ + ComputeInputFrameAboveFpFixedSize();
 
     Address fp_address = input_->GetFramePointerAddress();
-    caller_fp_ = Memory::intptr_at(fp_address);
+    caller_fp_ = Memory<intptr_t>(fp_address);
     caller_pc_ =
-        Memory::intptr_at(fp_address + CommonFrameConstants::kCallerPCOffset);
-    input_frame_context_ = Memory::intptr_at(
+        Memory<intptr_t>(fp_address + CommonFrameConstants::kCallerPCOffset);
+    input_frame_context_ = Memory<intptr_t>(
         fp_address + CommonFrameConstants::kContextOrFrameTypeOffset);
 
     if (FLAG_enable_embedded_constant_pool) {
-      caller_constant_pool_ = Memory::intptr_at(
+      caller_constant_pool_ = Memory<intptr_t>(
           fp_address + CommonFrameConstants::kConstantPoolOffset);
     }
   }
@@ -1830,7 +1830,7 @@ void Deoptimizer::EnsureCodeForDeoptimizationEntry(Isolate* isolate,
   GenerateDeoptimizationEntries(&masm, kMaxNumberOfEntries, kind);
   CodeDesc desc;
   masm.GetCode(isolate, &desc);
-  DCHECK(!RelocInfo::RequiresRelocation(desc));
+  DCHECK(!RelocInfo::RequiresRelocationAfterCodegen(desc));
 
   // Allocate the code as immovable since the entry addresses will be used
   // directly and there is no support for relocating them.
@@ -1998,6 +1998,10 @@ void Translation::StoreInt32Register(Register reg) {
   buffer_->Add(reg.code());
 }
 
+void Translation::StoreInt64Register(Register reg) {
+  buffer_->Add(INT64_REGISTER);
+  buffer_->Add(reg.code());
+}
 
 void Translation::StoreUint32Register(Register reg) {
   buffer_->Add(UINT32_REGISTER);
@@ -2032,6 +2036,10 @@ void Translation::StoreInt32StackSlot(int index) {
   buffer_->Add(index);
 }
 
+void Translation::StoreInt64StackSlot(int index) {
+  buffer_->Add(INT64_STACK_SLOT);
+  buffer_->Add(index);
+}
 
 void Translation::StoreUint32StackSlot(int index) {
   buffer_->Add(UINT32_STACK_SLOT);
@@ -2080,12 +2088,14 @@ int Translation::NumberOfOperandsFor(Opcode opcode) {
     case CAPTURED_OBJECT:
     case REGISTER:
     case INT32_REGISTER:
+    case INT64_REGISTER:
     case UINT32_REGISTER:
     case BOOL_REGISTER:
     case FLOAT_REGISTER:
     case DOUBLE_REGISTER:
     case STACK_SLOT:
     case INT32_STACK_SLOT:
+    case INT64_STACK_SLOT:
     case UINT32_STACK_SLOT:
     case BOOL_STACK_SLOT:
     case FLOAT_STACK_SLOT:
@@ -2350,6 +2360,13 @@ TranslatedValue TranslatedValue::NewInt32(TranslatedState* container,
   return slot;
 }
 
+// static
+TranslatedValue TranslatedValue::NewInt64(TranslatedState* container,
+                                          int64_t value) {
+  TranslatedValue slot(container, kInt64);
+  slot.int64_value_ = value;
+  return slot;
+}
 
 // static
 TranslatedValue TranslatedValue::NewUInt32(TranslatedState* container,
@@ -2398,6 +2415,10 @@ int32_t TranslatedValue::int32_value() const {
   return int32_value_;
 }
 
+int64_t TranslatedValue::int64_value() const {
+  DCHECK_EQ(kInt64, kind());
+  return int64_value_;
+}
 
 uint32_t TranslatedValue::uint32_value() const {
   DCHECK(kind() == kUInt32 || kind() == kBoolBit);
@@ -2446,6 +2467,15 @@ Object* TranslatedValue::GetRawValue() const {
       break;
     }
 
+    case kInt64: {
+      bool is_smi = (int64_value() >= static_cast<int64_t>(Smi::kMinValue) &&
+                     int64_value() <= static_cast<int64_t>(Smi::kMaxValue));
+      if (is_smi) {
+        return Smi::FromIntptr(static_cast<intptr_t>(int64_value()));
+      }
+      break;
+    }
+
     case kUInt32: {
       bool is_smi = (uint32_value() <= static_cast<uintptr_t>(Smi::kMaxValue));
       if (is_smi) {
@@ -2486,6 +2516,7 @@ Handle<Object> TranslatedValue::GetValue() {
   switch (kind()) {
     case TranslatedValue::kTagged:
     case TranslatedValue::kInt32:
+    case TranslatedValue::kInt64:
     case TranslatedValue::kUInt32:
     case TranslatedValue::kBoolBit:
     case TranslatedValue::kFloat:
@@ -2537,6 +2568,11 @@ void TranslatedValue::MaterializeSimple() {
     case kInt32:
       set_initialized_storage(
           Handle<Object>(isolate()->factory()->NewNumber(int32_value())));
+      return;
+
+    case kInt64:
+      set_initialized_storage(Handle<Object>(
+          isolate()->factory()->NewNumber(static_cast<double>(int64_value()))));
       return;
 
     case kUInt32:
@@ -2592,13 +2628,16 @@ int TranslatedValue::GetChildrenCount() const {
   }
 }
 
+uint64_t TranslatedState::GetUInt64Slot(Address fp, int slot_offset) {
+  return Memory<uint64_t>(fp + slot_offset);
+}
 
 uint32_t TranslatedState::GetUInt32Slot(Address fp, int slot_offset) {
   Address address = fp + slot_offset;
 #if V8_TARGET_BIG_ENDIAN && V8_HOST_ARCH_64_BIT
-  return Memory::uint32_at(address + kIntSize);
+  return Memory<uint32_t>(address + kIntSize);
 #else
-  return Memory::uint32_at(address);
+  return Memory<uint32_t>(address);
 #endif
 }
 
@@ -2606,12 +2645,12 @@ Float32 TranslatedState::GetFloatSlot(Address fp, int slot_offset) {
 #if !V8_TARGET_ARCH_S390X && !V8_TARGET_ARCH_PPC64
   return Float32::FromBits(GetUInt32Slot(fp, slot_offset));
 #else
-  return Float32::FromBits(Memory::uint32_at(fp + slot_offset));
+  return Float32::FromBits(Memory<uint32_t>(fp + slot_offset));
 #endif
 }
 
 Float64 TranslatedState::GetDoubleSlot(Address fp, int slot_offset) {
-  return Float64::FromBits(Memory::uint64_at(fp + slot_offset));
+  return Float64::FromBits(GetUInt64Slot(fp, slot_offset));
 }
 
 void TranslatedValue::Handlify() {
@@ -2814,12 +2853,14 @@ TranslatedFrame TranslatedState::CreateNextTranslatedFrame(
     case Translation::CAPTURED_OBJECT:
     case Translation::REGISTER:
     case Translation::INT32_REGISTER:
+    case Translation::INT64_REGISTER:
     case Translation::UINT32_REGISTER:
     case Translation::BOOL_REGISTER:
     case Translation::FLOAT_REGISTER:
     case Translation::DOUBLE_REGISTER:
     case Translation::STACK_SLOT:
     case Translation::INT32_STACK_SLOT:
+    case Translation::INT64_STACK_SLOT:
     case Translation::UINT32_STACK_SLOT:
     case Translation::BOOL_STACK_SLOT:
     case Translation::FLOAT_STACK_SLOT:
@@ -2851,7 +2892,7 @@ Address TranslatedState::ComputeArgumentsPosition(Address input_frame_pointer,
                                                   int* length) {
   Address parent_frame_pointer = *reinterpret_cast<Address*>(
       input_frame_pointer + StandardFrameConstants::kCallerFPOffset);
-  intptr_t parent_frame_type = Memory::intptr_at(
+  intptr_t parent_frame_type = Memory<intptr_t>(
       parent_frame_pointer + CommonFrameConstants::kContextOrFrameTypeOffset);
 
   Address arguments_frame;
@@ -3029,11 +3070,29 @@ int TranslatedState::CreateNextTranslatedValue(
       }
       intptr_t value = registers->GetRegister(input_reg);
       if (trace_file != nullptr) {
-        PrintF(trace_file, "%" V8PRIdPTR " ; %s ", value,
+        PrintF(trace_file, "%" V8PRIdPTR " ; %s (int32)", value,
                converter.NameOfCPURegister(input_reg));
       }
       TranslatedValue translated_value =
           TranslatedValue::NewInt32(this, static_cast<int32_t>(value));
+      frame.Add(translated_value);
+      return translated_value.GetChildrenCount();
+    }
+
+    case Translation::INT64_REGISTER: {
+      int input_reg = iterator->Next();
+      if (registers == nullptr) {
+        TranslatedValue translated_value = TranslatedValue::NewInvalid(this);
+        frame.Add(translated_value);
+        return translated_value.GetChildrenCount();
+      }
+      intptr_t value = registers->GetRegister(input_reg);
+      if (trace_file != nullptr) {
+        PrintF(trace_file, "%" V8PRIdPTR " ; %s (int64)", value,
+               converter.NameOfCPURegister(input_reg));
+      }
+      TranslatedValue translated_value =
+          TranslatedValue::NewInt64(this, static_cast<int64_t>(value));
       frame.Add(translated_value);
       return translated_value.GetChildrenCount();
     }
@@ -3047,7 +3106,7 @@ int TranslatedState::CreateNextTranslatedValue(
       }
       intptr_t value = registers->GetRegister(input_reg);
       if (trace_file != nullptr) {
-        PrintF(trace_file, "%" V8PRIuPTR " ; %s (uint)", value,
+        PrintF(trace_file, "%" V8PRIuPTR " ; %s (uint32)", value,
                converter.NameOfCPURegister(input_reg));
       }
       TranslatedValue translated_value =
@@ -3131,11 +3190,25 @@ int TranslatedState::CreateNextTranslatedValue(
           OptimizedFrame::StackSlotOffsetRelativeToFp(iterator->Next());
       uint32_t value = GetUInt32Slot(fp, slot_offset);
       if (trace_file != nullptr) {
-        PrintF(trace_file, "%d ; (int) [fp %c %3d] ",
+        PrintF(trace_file, "%d ; (int32) [fp %c %3d] ",
                static_cast<int32_t>(value), slot_offset < 0 ? '-' : '+',
                std::abs(slot_offset));
       }
       TranslatedValue translated_value = TranslatedValue::NewInt32(this, value);
+      frame.Add(translated_value);
+      return translated_value.GetChildrenCount();
+    }
+
+    case Translation::INT64_STACK_SLOT: {
+      int slot_offset =
+          OptimizedFrame::StackSlotOffsetRelativeToFp(iterator->Next());
+      uint64_t value = GetUInt64Slot(fp, slot_offset);
+      if (trace_file != nullptr) {
+        PrintF(trace_file, "%" V8PRIdPTR " ; (int64) [fp %c %3d] ",
+               static_cast<intptr_t>(value), slot_offset < 0 ? '-' : '+',
+               std::abs(slot_offset));
+      }
+      TranslatedValue translated_value = TranslatedValue::NewInt64(this, value);
       frame.Add(translated_value);
       return translated_value.GetChildrenCount();
     }
@@ -3145,7 +3218,7 @@ int TranslatedState::CreateNextTranslatedValue(
           OptimizedFrame::StackSlotOffsetRelativeToFp(iterator->Next());
       uint32_t value = GetUInt32Slot(fp, slot_offset);
       if (trace_file != nullptr) {
-        PrintF(trace_file, "%u ; (uint) [fp %c %3d] ", value,
+        PrintF(trace_file, "%u ; (uint32) [fp %c %3d] ", value,
                slot_offset < 0 ? '-' : '+', std::abs(slot_offset));
       }
       TranslatedValue translated_value =
@@ -3719,8 +3792,8 @@ void TranslatedState::InitializeJSObjectAt(
     Handle<Object> properties = GetValueAndAdvance(frame, value_index);
     WRITE_FIELD(*object_storage, JSObject::kPropertiesOrHashOffset,
                 *properties);
-    WRITE_BARRIER(isolate()->heap(), *object_storage,
-                  JSObject::kPropertiesOrHashOffset, *properties);
+    WRITE_BARRIER(*object_storage, JSObject::kPropertiesOrHashOffset,
+                  *properties);
   }
 
   // For all the other fields we first look at the fixed array and check the
@@ -3747,11 +3820,11 @@ void TranslatedState::InitializeJSObjectAt(
     } else if (marker == kStoreMutableHeapNumber) {
       CHECK(field_value->IsMutableHeapNumber());
       WRITE_FIELD(*object_storage, offset, *field_value);
-      WRITE_BARRIER(isolate()->heap(), *object_storage, offset, *field_value);
+      WRITE_BARRIER(*object_storage, offset, *field_value);
     } else {
       CHECK_EQ(kStoreTagged, marker);
       WRITE_FIELD(*object_storage, offset, *field_value);
-      WRITE_BARRIER(isolate()->heap(), *object_storage, offset, *field_value);
+      WRITE_BARRIER(*object_storage, offset, *field_value);
     }
   }
   object_storage->synchronized_set_map(*map);
@@ -3787,7 +3860,7 @@ void TranslatedState::InitializeObjectWithTaggedFieldsAt(
     }
 
     WRITE_FIELD(*object_storage, offset, *field_value);
-    WRITE_BARRIER(isolate()->heap(), *object_storage, offset, *field_value);
+    WRITE_BARRIER(*object_storage, offset, *field_value);
   }
 
   object_storage->synchronized_set_map(*map);

@@ -2,12 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/runtime/runtime-utils.h"
-
 #include <memory>
 
 #include "src/accessors.h"
-#include "src/arguments.h"
+#include "src/arguments-inl.h"
 #include "src/ast/scopes.h"
 #include "src/bootstrapper.h"
 #include "src/deoptimizer.h"
@@ -15,6 +13,7 @@
 #include "src/isolate-inl.h"
 #include "src/messages.h"
 #include "src/objects/module-inl.h"
+#include "src/runtime/runtime-utils.h"
 
 namespace v8 {
 namespace internal {
@@ -159,8 +158,8 @@ Object* DeclareGlobals(Isolate* isolate, Handle<FixedArray> declarations,
       FeedbackSlot feedback_cells_slot(
           Smi::ToInt(*possibly_feedback_cell_slot));
       Handle<FeedbackCell> feedback_cell(
-          FeedbackCell::cast(
-              feedback_vector->Get(feedback_cells_slot)->ToStrongHeapObject()),
+          FeedbackCell::cast(feedback_vector->Get(feedback_cells_slot)
+                                 ->GetHeapObjectAssumeStrong()),
           isolate);
       Handle<JSFunction> function =
           isolate->factory()->NewFunctionFromSharedFunctionInfo(
@@ -462,8 +461,7 @@ Handle<JSObject> NewSloppyArguments(Isolate* isolate, Handle<JSFunction> callee,
   return result;
 }
 
-
-class HandleArguments BASE_EMBEDDED {
+class HandleArguments {
  public:
   explicit HandleArguments(Handle<Object>* array) : array_(array) {}
   Object* operator[](int index) { return *array_[index]; }
@@ -472,8 +470,7 @@ class HandleArguments BASE_EMBEDDED {
   Handle<Object>* array_;
 };
 
-
-class ParameterArguments BASE_EMBEDDED {
+class ParameterArguments {
  public:
   explicit ParameterArguments(Object** parameters) : parameters_(parameters) {}
   Object*& operator[](int index) { return *(parameters_ - index - 1); }
@@ -671,8 +668,8 @@ RUNTIME_FUNCTION(Runtime_NewScriptContext) {
   DCHECK_EQ(1, args.length());
 
   CONVERT_ARG_HANDLE_CHECKED(ScopeInfo, scope_info, 0);
-  Handle<Context> native_context(isolate->context(), isolate);
-  DCHECK(native_context->IsNativeContext());
+  Handle<NativeContext> native_context(NativeContext::cast(isolate->context()),
+                                       isolate);
   Handle<JSGlobalObject> global_object(native_context->global_object(),
                                        isolate);
   Handle<ScriptContextTable> script_context_table(
@@ -722,7 +719,7 @@ RUNTIME_FUNCTION(Runtime_PushModuleContext) {
   CONVERT_ARG_HANDLE_CHECKED(Module, module, 0);
   CONVERT_ARG_HANDLE_CHECKED(ScopeInfo, scope_info, 1);
 
-  Handle<Context> outer(isolate->context(), isolate);
+  Handle<NativeContext> outer(NativeContext::cast(isolate->context()), isolate);
   Handle<Context> context =
       isolate->factory()->NewModuleContext(module, outer, scope_info);
   isolate->set_context(*context);

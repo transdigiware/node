@@ -629,6 +629,7 @@ void Verifier::Visitor::Check(Node* node, const AllNodes& all) {
       CheckTypeIs(node, Type::Name());
       break;
     case IrOpcode::kJSToNumber:
+    case IrOpcode::kJSToNumberConvertBigInt:
       // Type is Number.
       CheckTypeIs(node, Type::Number());
       break;
@@ -714,8 +715,13 @@ void Verifier::Visitor::Check(Node* node, const AllNodes& all) {
       // Type is Array.
       CheckTypeIs(node, Type::Array());
       break;
+    case IrOpcode::kJSCreateArrayFromIterable:
+      // Type is Array.
+      CheckTypeIs(node, Type::Array());
+      break;
     case IrOpcode::kJSCreateLiteralObject:
     case IrOpcode::kJSCreateEmptyLiteralObject:
+    case IrOpcode::kJSCloneObject:
     case IrOpcode::kJSCreateLiteralRegExp:
       // Type is OtherObject.
       CheckTypeIs(node, Type::OtherObject());
@@ -1088,6 +1094,12 @@ void Verifier::Visitor::Check(Node* node, const AllNodes& all) {
       CheckValueInputIs(node, 0, Type::PlainPrimitive());
       CheckTypeIs(node, Type::Number());
       break;
+    case IrOpcode::kStringConcat:
+      CheckValueInputIs(node, 0, TypeCache::Get().kStringLengthType);
+      CheckValueInputIs(node, 1, Type::String());
+      CheckValueInputIs(node, 2, Type::String());
+      CheckTypeIs(node, Type::String());
+      break;
     case IrOpcode::kStringEqual:
     case IrOpcode::kStringLessThan:
     case IrOpcode::kStringLessThanOrEqual:
@@ -1171,7 +1183,6 @@ void Verifier::Visitor::Check(Node* node, const AllNodes& all) {
     case IrOpcode::kObjectIsString:
     case IrOpcode::kObjectIsSymbol:
     case IrOpcode::kObjectIsUndetectable:
-    case IrOpcode::kArrayBufferWasNeutered:
       CheckValueInputIs(node, 0, Type::Any());
       CheckTypeIs(node, Type::Boolean());
       break;
@@ -1273,6 +1284,8 @@ void Verifier::Visitor::Check(Node* node, const AllNodes& all) {
       // CheckTypeIs(node, to));
       break;
     }
+    case IrOpcode::kChangeTaggedSignedToInt64:
+      break;
     case IrOpcode::kChangeTaggedToInt32: {
       // Signed32 /\ Tagged -> Signed32 /\ UntaggedInt32
       // TODO(neis): Activate once ChangeRepresentation works in typer.
@@ -1282,6 +1295,8 @@ void Verifier::Visitor::Check(Node* node, const AllNodes& all) {
       // CheckTypeIs(node, to));
       break;
     }
+    case IrOpcode::kChangeTaggedToInt64:
+      break;
     case IrOpcode::kChangeTaggedToUint32: {
       // Unsigned32 /\ Tagged -> Unsigned32 /\ UntaggedInt32
       // TODO(neis): Activate once ChangeRepresentation works in typer.
@@ -1330,6 +1345,8 @@ void Verifier::Visitor::Check(Node* node, const AllNodes& all) {
       // CheckTypeIs(node, to));
       break;
     }
+    case IrOpcode::kChangeInt64ToTagged:
+      break;
     case IrOpcode::kChangeUint32ToTagged: {
       // Unsigned32 /\ UntaggedInt32 -> Unsigned32 /\ Tagged
       // TODO(neis): Activate once ChangeRepresentation works in typer.
@@ -1339,6 +1356,8 @@ void Verifier::Visitor::Check(Node* node, const AllNodes& all) {
       // CheckTypeIs(node, to));
       break;
     }
+    case IrOpcode::kChangeUint64ToTagged:
+      break;
     case IrOpcode::kChangeFloat64ToTagged: {
       // Number /\ UntaggedFloat64 -> Number /\ Tagged
       // TODO(neis): Activate once ChangeRepresentation works in typer.
@@ -1428,7 +1447,6 @@ void Verifier::Visitor::Check(Node* node, const AllNodes& all) {
       CheckValueInputIs(node, 0, Type::Any());
       CheckTypeIs(node, Type::Symbol());
       break;
-
     case IrOpcode::kConvertReceiver:
       // (Any, Any) -> Receiver
       CheckValueInputIs(node, 0, Type::Any());
@@ -1444,8 +1462,12 @@ void Verifier::Visitor::Check(Node* node, const AllNodes& all) {
     case IrOpcode::kCheckedUint32Mod:
     case IrOpcode::kCheckedInt32Mul:
     case IrOpcode::kCheckedInt32ToTaggedSigned:
+    case IrOpcode::kCheckedInt64ToInt32:
+    case IrOpcode::kCheckedInt64ToTaggedSigned:
     case IrOpcode::kCheckedUint32ToInt32:
     case IrOpcode::kCheckedUint32ToTaggedSigned:
+    case IrOpcode::kCheckedUint64ToInt32:
+    case IrOpcode::kCheckedUint64ToTaggedSigned:
     case IrOpcode::kCheckedFloat64ToInt32:
     case IrOpcode::kCheckedTaggedSignedToInt32:
     case IrOpcode::kCheckedTaggedToInt32:
@@ -1687,9 +1709,11 @@ void Verifier::Visitor::Check(Node* node, const AllNodes& all) {
     case IrOpcode::kChangeInt32ToInt64:
     case IrOpcode::kChangeUint32ToUint64:
     case IrOpcode::kChangeInt32ToFloat64:
+    case IrOpcode::kChangeInt64ToFloat64:
     case IrOpcode::kChangeUint32ToFloat64:
     case IrOpcode::kChangeFloat32ToFloat64:
     case IrOpcode::kChangeFloat64ToInt32:
+    case IrOpcode::kChangeFloat64ToInt64:
     case IrOpcode::kChangeFloat64ToUint32:
     case IrOpcode::kChangeFloat64ToUint64:
     case IrOpcode::kFloat64SilenceNaN:
@@ -1736,6 +1760,15 @@ void Verifier::Visitor::Check(Node* node, const AllNodes& all) {
     case IrOpcode::kWord64AtomicXor:
     case IrOpcode::kWord64AtomicExchange:
     case IrOpcode::kWord64AtomicCompareExchange:
+    case IrOpcode::kWord32AtomicPairLoad:
+    case IrOpcode::kWord32AtomicPairStore:
+    case IrOpcode::kWord32AtomicPairAdd:
+    case IrOpcode::kWord32AtomicPairSub:
+    case IrOpcode::kWord32AtomicPairAnd:
+    case IrOpcode::kWord32AtomicPairOr:
+    case IrOpcode::kWord32AtomicPairXor:
+    case IrOpcode::kWord32AtomicPairExchange:
+    case IrOpcode::kWord32AtomicPairCompareExchange:
     case IrOpcode::kSpeculationFence:
     case IrOpcode::kSignExtendWord8ToInt32:
     case IrOpcode::kSignExtendWord16ToInt32:

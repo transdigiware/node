@@ -5,12 +5,12 @@
 #ifndef V8_COMPILER_COMMON_OPERATOR_H_
 #define V8_COMPILER_COMMON_OPERATOR_H_
 
-#include "src/assembler.h"
 #include "src/base/compiler-specific.h"
 #include "src/compiler/frame-states.h"
 #include "src/deoptimize-reason.h"
 #include "src/globals.h"
 #include "src/machine-type.h"
+#include "src/reloc-info.h"
 #include "src/vector-slot-pair.h"
 #include "src/zone/zone-containers.h"
 #include "src/zone/zone-handle-set.h"
@@ -255,7 +255,7 @@ class SparseInputMask final {
   // An iterator over a node's sparse inputs.
   class InputIterator final {
    public:
-    InputIterator() {}
+    InputIterator() = default;
     InputIterator(BitMaskType bit_mask, Node* parent);
 
     Node* parent() const { return parent_; }

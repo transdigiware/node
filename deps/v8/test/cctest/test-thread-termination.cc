@@ -25,7 +25,7 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/isolate.h"
 #include "src/objects-inl.h"
 #include "src/v8.h"
@@ -166,7 +166,7 @@ class TerminatorThread : public v8::base::Thread {
   explicit TerminatorThread(i::Isolate* isolate)
       : Thread(Options("TerminatorThread")),
         isolate_(reinterpret_cast<v8::Isolate*>(isolate)) {}
-  void Run() {
+  void Run() override {
     semaphore->Wait();
     CHECK(!isolate_->IsExecutionTerminating());
     isolate_->TerminateExecution();
@@ -800,7 +800,7 @@ class TerminatorSleeperThread : public v8::base::Thread {
       : Thread(Options("TerminatorSlepperThread")),
         isolate_(isolate),
         sleep_ms_(sleep_ms) {}
-  void Run() {
+  void Run() override {
     v8::base::OS::Sleep(v8::base::TimeDelta::FromMilliseconds(sleep_ms_));
     CHECK(!isolate_->IsExecutionTerminating());
     isolate_->TerminateExecution();

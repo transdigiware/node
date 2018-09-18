@@ -30,7 +30,7 @@ class CWasmEntryArgTester {
  public:
   CWasmEntryArgTester(std::initializer_list<uint8_t> wasm_function_bytes,
                       std::function<ReturnType(Args...)> expected_fn)
-      : runner_(kExecuteTurbofan),
+      : runner_(ExecutionTier::kOptimized),
         isolate_(runner_.main_isolate()),
         expected_fn_(expected_fn),
         sig_(runner_.template CreateSig<ReturnType, Args...>()) {
@@ -62,10 +62,11 @@ class CWasmEntryArgTester {
     Handle<Object> buffer_obj(reinterpret_cast<Object*>(arg_buffer.data()),
                               isolate_);
     CHECK(!buffer_obj->IsHeapObject());
-    Handle<Object> call_args[]{
-        Handle<Object>::cast(isolate_->factory()->NewForeign(
-            wasm_code_->instruction_start(), TENURED)),
-        runner_.builder().instance_object(), buffer_obj};
+    Handle<Object> code_entry_obj(
+        reinterpret_cast<Object*>(wasm_code_->instruction_start()), isolate_);
+    CHECK(!code_entry_obj->IsHeapObject());
+    Handle<Object> call_args[]{code_entry_obj,
+                               runner_.builder().instance_object(), buffer_obj};
     static_assert(
         arraysize(call_args) == compiler::CWasmEntryParameters::kNumParameters,
         "adapt this test");
@@ -93,7 +94,7 @@ class CWasmEntryArgTester {
   std::function<ReturnType(Args...)> expected_fn_;
   FunctionSig* sig_;
   Handle<JSFunction> c_wasm_entry_fn_;
-  wasm::WasmCode* wasm_code_;
+  WasmCode* wasm_code_;
 };
 
 }  // namespace

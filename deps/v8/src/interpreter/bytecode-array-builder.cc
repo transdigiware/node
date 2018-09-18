@@ -23,7 +23,7 @@ class RegisterTransferWriter final
       public NON_EXPORTED_BASE(ZoneObject) {
  public:
   RegisterTransferWriter(BytecodeArrayBuilder* builder) : builder_(builder) {}
-  ~RegisterTransferWriter() override {}
+  ~RegisterTransferWriter() override = default;
 
   void EmitLdar(Register input) override { builder_->OutputLdarRaw(input); }
 
@@ -973,6 +973,11 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::CreateArrayLiteral(
   return *this;
 }
 
+BytecodeArrayBuilder& BytecodeArrayBuilder::CreateArrayFromIterable() {
+  OutputCreateArrayFromIterable();
+  return *this;
+}
+
 BytecodeArrayBuilder& BytecodeArrayBuilder::CreateObjectLiteral(
     size_t constant_properties_entry, int literal_index, int flags,
     Register output) {
@@ -983,6 +988,13 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::CreateObjectLiteral(
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::CreateEmptyObjectLiteral() {
   OutputCreateEmptyObjectLiteral();
+  return *this;
+}
+
+BytecodeArrayBuilder& BytecodeArrayBuilder::CloneObject(Register source,
+                                                        int flags,
+                                                        int feedback_slot) {
+  OutputCloneObject(source, flags, feedback_slot);
   return *this;
 }
 
@@ -1365,6 +1377,12 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::CallAnyReceiver(Register callable,
                                                             RegisterList args,
                                                             int feedback_slot) {
   OutputCallAnyReceiver(callable, args, args.register_count(), feedback_slot);
+  return *this;
+}
+
+BytecodeArrayBuilder& BytecodeArrayBuilder::CallNoFeedback(Register callable,
+                                                           RegisterList args) {
+  OutputCallNoFeedback(callable, args, args.register_count());
   return *this;
 }
 

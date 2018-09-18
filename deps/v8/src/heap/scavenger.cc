@@ -40,7 +40,7 @@ class IterateAndScavengePromotedObjectsVisitor final : public ObjectVisitor {
     for (MaybeObject** slot = start; slot < end; ++slot) {
       MaybeObject* target = *slot;
       HeapObject* heap_object;
-      if (target->ToStrongOrWeakHeapObject(&heap_object)) {
+      if (target->GetHeapObject(&heap_object)) {
         HandleSlot(host, reinterpret_cast<Address>(slot), heap_object);
       }
     }
@@ -53,15 +53,13 @@ class IterateAndScavengePromotedObjectsVisitor final : public ObjectVisitor {
     scavenger_->PageMemoryFence(reinterpret_cast<MaybeObject*>(target));
 
     if (Heap::InFromSpace(target)) {
-      scavenger_->ScavengeObject(slot, target);
-      bool success = (*slot)->ToStrongOrWeakHeapObject(&target);
+      SlotCallbackResult result = scavenger_->ScavengeObject(slot, target);
+      bool success = (*slot)->GetHeapObject(&target);
       USE(success);
       DCHECK(success);
-      scavenger_->PageMemoryFence(reinterpret_cast<MaybeObject*>(target));
 
-      if (Heap::InNewSpace(target)) {
+      if (result == KEEP_SLOT) {
         SLOW_DCHECK(target->IsHeapObject());
-        SLOW_DCHECK(Heap::InToSpace(target));
         RememberedSet<OLD_TO_NEW>::Insert(Page::FromAddress(slot_address),
                                           slot_address);
       }
@@ -201,6 +199,12 @@ void RootScavengeVisitor::ScavengePointer(Object** p) {
   scavenger_->ScavengeObject(reinterpret_cast<HeapObjectReference**>(p),
                              reinterpret_cast<HeapObject*>(object));
 }
+
+RootScavengeVisitor::RootScavengeVisitor(Scavenger* scavenger)
+    : scavenger_(scavenger) {}
+
+ScavengeVisitor::ScavengeVisitor(Scavenger* scavenger)
+    : scavenger_(scavenger) {}
 
 }  // namespace internal
 }  // namespace v8

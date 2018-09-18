@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/runtime/runtime-utils.h"
-
-#include "src/arguments.h"
+#include "src/arguments-inl.h"
 #include "src/elements.h"
 #include "src/heap/factory.h"
+#include "src/heap/heap-inl.h"
 #include "src/messages.h"
 #include "src/objects-inl.h"
+#include "src/objects/js-array-buffer-inl.h"
+#include "src/runtime/runtime-utils.h"
 #include "src/runtime/runtime.h"
 
 namespace v8 {
@@ -29,14 +30,14 @@ RUNTIME_FUNCTION(Runtime_ArrayBufferNeuter) {
     return ReadOnlyRoots(isolate).undefined_value();
   }
   if (array_buffer->backing_store() == nullptr) {
-    CHECK_EQ(Smi::kZero, array_buffer->byte_length());
+    CHECK_EQ(0, array_buffer->byte_length());
     return ReadOnlyRoots(isolate).undefined_value();
   }
   // Shared array buffers should never be neutered.
   CHECK(!array_buffer->is_shared());
   DCHECK(!array_buffer->is_external());
   void* backing_store = array_buffer->backing_store();
-  size_t byte_length = NumberToSize(array_buffer->byte_length());
+  size_t byte_length = array_buffer->byte_length();
   array_buffer->set_is_external(true);
   isolate->heap()->UnregisterArrayBuffer(*array_buffer);
   array_buffer->Neuter();
@@ -123,7 +124,7 @@ RUNTIME_FUNCTION(Runtime_TypedArraySortFast) {
   Handle<FixedTypedArrayBase> elements(
       FixedTypedArrayBase::cast(array->elements()), isolate);
   switch (array->type()) {
-#define TYPED_ARRAY_SORT(Type, type, TYPE, ctype, size)     \
+#define TYPED_ARRAY_SORT(Type, type, TYPE, ctype)           \
   case kExternal##Type##Array: {                            \
     ctype* data = static_cast<ctype*>(elements->DataPtr()); \
     if (kExternal##Type##Array == kExternalFloat64Array ||  \

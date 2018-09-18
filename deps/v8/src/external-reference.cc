@@ -180,7 +180,7 @@ ExternalReference::incremental_marking_record_write_function() {
 
 ExternalReference ExternalReference::store_buffer_overflow_function() {
   return ExternalReference(
-      Redirect(FUNCTION_ADDR(StoreBuffer::StoreBufferOverflow)));
+      Redirect(Heap::store_buffer_overflow_function_address()));
 }
 
 ExternalReference ExternalReference::delete_handle_scope_extensions() {
@@ -364,16 +364,6 @@ ExternalReference ExternalReference::wasm_float64_pow() {
   return ExternalReference(Redirect(FUNCTION_ADDR(wasm::float64_pow_wrapper)));
 }
 
-ExternalReference ExternalReference::wasm_set_thread_in_wasm_flag() {
-  return ExternalReference(
-      Redirect(FUNCTION_ADDR(wasm::set_thread_in_wasm_flag)));
-}
-
-ExternalReference ExternalReference::wasm_clear_thread_in_wasm_flag() {
-  return ExternalReference(
-      Redirect(FUNCTION_ADDR(wasm::clear_thread_in_wasm_flag)));
-}
-
 static void f64_mod_wrapper(Address data) {
   double dividend = ReadUnalignedValue<double>(data);
   double divisor = ReadUnalignedValue<double>(data + sizeof(dividend));
@@ -469,8 +459,16 @@ ExternalReference ExternalReference::address_of_pending_message_obj(
   return ExternalReference(isolate->pending_message_obj_address());
 }
 
+ExternalReference ExternalReference::abort_with_reason() {
+  return ExternalReference(Redirect(FUNCTION_ADDR(i::abort_with_reason)));
+}
+
 ExternalReference ExternalReference::address_of_min_int() {
   return ExternalReference(reinterpret_cast<Address>(&double_min_int_constant));
+}
+
+ExternalReference ExternalReference::address_of_runtime_stats_flag() {
+  return ExternalReference(&FLAG_runtime_stats);
 }
 
 ExternalReference ExternalReference::address_of_one_half() {
@@ -788,6 +786,10 @@ ExternalReference ExternalReference::try_internalize_string_function() {
       Redirect(FUNCTION_ADDR(StringTable::LookupStringIfExists_NoAllocate)));
 }
 
+ExternalReference ExternalReference::smi_lexicographic_compare_function() {
+  return ExternalReference(Redirect(FUNCTION_ADDR(Smi::LexicographicCompare)));
+}
+
 ExternalReference ExternalReference::check_object_type() {
   return ExternalReference(Redirect(FUNCTION_ADDR(CheckObjectType)));
 }
@@ -843,6 +845,11 @@ ExternalReference::promise_hook_or_async_event_delegate_address(
       isolate->promise_hook_or_async_event_delegate_address());
 }
 
+ExternalReference ExternalReference::debug_execution_mode_address(
+    Isolate* isolate) {
+  return ExternalReference(isolate->debug_execution_mode_address());
+}
+
 ExternalReference ExternalReference::debug_is_active_address(Isolate* isolate) {
   return ExternalReference(isolate->debug()->is_active_address());
 }
@@ -863,21 +870,19 @@ ExternalReference ExternalReference::invalidate_prototype_chains_function() {
       Redirect(FUNCTION_ADDR(JSObject::InvalidatePrototypeChains)));
 }
 
-double power_helper(Isolate* isolate, double x, double y) {
+double power_helper(double x, double y) {
   int y_int = static_cast<int>(y);
   if (y == y_int) {
     return power_double_int(x, y_int);  // Returns 1 if exponent is 0.
   }
   if (y == 0.5) {
-    lazily_initialize_fast_sqrt(isolate);
+    lazily_initialize_fast_sqrt();
     return (std::isinf(x)) ? V8_INFINITY
-                           : fast_sqrt(x + 0.0, isolate);  // Convert -0 to +0.
+                           : fast_sqrt(x + 0.0);  // Convert -0 to +0.
   }
   if (y == -0.5) {
-    lazily_initialize_fast_sqrt(isolate);
-    return (std::isinf(x)) ? 0
-                           : 1.0 / fast_sqrt(x + 0.0,
-                                             isolate);  // Convert -0 to +0.
+    lazily_initialize_fast_sqrt();
+    return (std::isinf(x)) ? 0 : 1.0 / fast_sqrt(x + 0.0);  // Convert -0 to +0.
   }
   return power_double_double(x, y);
 }
@@ -931,6 +936,12 @@ ExternalReference ExternalReference::debug_restart_fp_address(
   return ExternalReference(isolate->debug()->restart_fp_address());
 }
 
+ExternalReference ExternalReference::wasm_thread_in_wasm_flag_address_address(
+    Isolate* isolate) {
+  return ExternalReference(reinterpret_cast<Address>(
+      &isolate->thread_local_top()->thread_in_wasm_flag_address_));
+}
+
 ExternalReference ExternalReference::fixed_typed_array_base_data_offset() {
   return ExternalReference(reinterpret_cast<void*>(
       FixedTypedArrayBase::kDataOffset - kHeapObjectTag));
@@ -953,6 +964,17 @@ std::ostream& operator<<(std::ostream& os, ExternalReference reference) {
   const Runtime::Function* fn = Runtime::FunctionForEntry(reference.address());
   if (fn) os << "<" << fn->name << ".entry>";
   return os;
+}
+
+void abort_with_reason(int reason) {
+  if (IsValidAbortReason(reason)) {
+    const char* message = GetAbortReason(static_cast<AbortReason>(reason));
+    base::OS::PrintError("abort: %s\n", message);
+  } else {
+    base::OS::PrintError("abort: <unknown reason: %d>\n", reason);
+  }
+  base::OS::Abort();
+  UNREACHABLE();
 }
 
 }  // namespace internal

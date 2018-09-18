@@ -250,14 +250,14 @@ enum class RememberedSetUpdatingMode { ALL, OLD_TO_NEW_ONLY };
 // Base class for minor and full MC collectors.
 class MarkCompactCollectorBase {
  public:
-  virtual ~MarkCompactCollectorBase() {}
+  virtual ~MarkCompactCollectorBase() = default;
 
   virtual void SetUp() = 0;
   virtual void TearDown() = 0;
   virtual void CollectGarbage() = 0;
 
   inline Heap* heap() const { return heap_; }
-  inline Isolate* isolate() { return heap()->isolate(); }
+  inline Isolate* isolate();
 
  protected:
   static const int kMainThread = 0;
@@ -420,7 +420,6 @@ typedef Worklist<Ephemeron, 64> EphemeronWorklist;
 
 // Weak objects encountered during marking.
 struct WeakObjects {
-  Worklist<WeakCell*, 64> weak_cells;
   Worklist<TransitionArray*, 64> transition_arrays;
 
   // Keep track of all EphemeronHashTables in the heap to process
@@ -501,8 +500,8 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
     }
 
     HeapObject* PopBailout() {
-      HeapObject* result;
 #ifdef V8_CONCURRENT_MARKING
+      HeapObject* result;
       if (bailout_.Pop(kMainThread, &result)) return result;
 #endif
       return nullptr;
@@ -627,8 +626,6 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
   void UpdateSlots(SlotsBuffer* buffer);
   void UpdateSlotsRecordedIn(SlotsBuffer* buffer);
 
-  void ClearMarkbits();
-
   bool is_compacting() const { return compacting_; }
 
   // Ensures that sweeping is finished.
@@ -646,10 +643,6 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
   MarkingWorklist* marking_worklist() { return &marking_worklist_; }
 
   WeakObjects* weak_objects() { return &weak_objects_; }
-
-  void AddWeakCell(WeakCell* weak_cell) {
-    weak_objects_.weak_cells.Push(kMainThread, weak_cell);
-  }
 
   void AddTransitionArray(TransitionArray* array) {
     weak_objects_.transition_arrays.Push(kMainThread, array);
@@ -708,7 +701,7 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
 
  private:
   explicit MarkCompactCollector(Heap* heap);
-  ~MarkCompactCollector();
+  ~MarkCompactCollector() override;
 
   bool WillBeDeoptimized(Code* code);
 
@@ -810,11 +803,10 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
   // The linked list of all encountered weak maps is destroyed.
   void ClearWeakCollections();
 
-  // Goes through the list of encountered weak cells and clears those with
+  // Goes through the list of encountered weak references and clears those with
   // dead values. If the value is a dead map and the parent map transitions to
   // the dead map via weak cell, then this function also clears the map
   // transition.
-  void ClearWeakCells();
   void ClearWeakReferences();
   void AbortWeakObjects();
 
@@ -840,9 +832,6 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
   void ReleaseEvacuationCandidates();
   void PostProcessEvacuationCandidates();
   void ReportAbortedEvacuationCandidate(HeapObject* failed_object, Page* page);
-
-  void ClearMarkbitsInPagedSpace(PagedSpace* space);
-  void ClearMarkbitsInNewSpace(NewSpace* space);
 
   static const int kEphemeronChunkSize = 8 * KB;
 
@@ -922,11 +911,9 @@ class MarkingVisitor final
   V8_INLINE int VisitEphemeronHashTable(Map* map, EphemeronHashTable* object);
   V8_INLINE int VisitFixedArray(Map* map, FixedArray* object);
   V8_INLINE int VisitJSApiObject(Map* map, JSObject* object);
-  V8_INLINE int VisitJSFunction(Map* map, JSFunction* object);
   V8_INLINE int VisitMap(Map* map, Map* object);
   V8_INLINE int VisitNativeContext(Map* map, Context* object);
   V8_INLINE int VisitTransitionArray(Map* map, TransitionArray* object);
-  V8_INLINE int VisitWeakCell(Map* map, WeakCell* object);
 
   // ObjectVisitor implementation.
   V8_INLINE void VisitPointer(HeapObject* host, Object** p) final;
@@ -987,7 +974,7 @@ class MinorMarkCompactCollector final : public MarkCompactCollectorBase {
   using NonAtomicMarkingState = MinorNonAtomicMarkingState;
 
   explicit MinorMarkCompactCollector(Heap* heap);
-  ~MinorMarkCompactCollector();
+  ~MinorMarkCompactCollector() override;
 
   MarkingState* marking_state() { return &marking_state_; }
 

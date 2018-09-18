@@ -224,8 +224,8 @@ class Register : public RegisterBase<Register, kRegAfterLast> {
 };
 
 // s7: context register
-// s3: lithium scratch
-// s4: lithium scratch2
+// s3: scratch register
+// s4: scratch register 2
 #define DECLARE_REGISTER(R) \
   constexpr Register R = Register::from_code<kRegCode_##R>();
 GENERAL_REGISTERS(DECLARE_REGISTER)
@@ -310,6 +310,7 @@ DOUBLE_REGISTERS(DECLARE_DOUBLE_REGISTER)
 #undef DECLARE_DOUBLE_REGISTER
 
 constexpr DoubleRegister no_freg = DoubleRegister::no_reg();
+constexpr DoubleRegister no_dreg = DoubleRegister::no_reg();
 
 // SIMD registers.
 typedef MSARegister Simd128Register;
@@ -391,7 +392,7 @@ constexpr MSAControlRegister MSACSR = {kMSACSRRegister};
 constexpr int kSmiShift = kSmiTagSize + kSmiShiftSize;
 constexpr uint64_t kSmiShiftMask = (1UL << kSmiShift) - 1;
 // Class Operand represents a shifter operand in data processing instructions.
-class Operand BASE_EMBEDDED {
+class Operand {
  public:
   // Immediate.
   V8_INLINE explicit Operand(int64_t immediate,
@@ -482,8 +483,7 @@ class MemOperand : public Operand {
   friend class Assembler;
 };
 
-
-class Assembler : public AssemblerBase {
+class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
  public:
   // Create an assembler. Instructions and relocation information are emitted
   // into a buffer, with the instructions starting from the beginning and the
@@ -565,6 +565,7 @@ class Assembler : public AssemblerBase {
   }
   uint64_t jump_address(Label* L);
   uint64_t jump_offset(Label* L);
+  uint64_t branch_long_offset(Label* L);
 
   // Puts a labels target address at the given position.
   // The high 8 bits are set to zero.
@@ -616,16 +617,19 @@ class Assembler : public AssemblerBase {
       Address pc, Address target,
       RelocInfo::Mode mode = RelocInfo::INTERNAL_REFERENCE);
 
-  // Size of an instruction.
-  static constexpr int kInstrSize = sizeof(Instr);
-
   // Difference between address of current opcode and target address offset.
-  static constexpr int kBranchPCOffset = 4;
+  static constexpr int kBranchPCOffset = kInstrSize;
 
   // Difference between address of current opcode and target address offset,
   // when we are generatinga sequence of instructions for long relative PC
   // branches
-  static constexpr int kLongBranchPCOffset = 12;
+  static constexpr int kLongBranchPCOffset = 3 * kInstrSize;
+
+  // Adjust ra register in branch delay slot of bal instruction so to skip
+  // instructions not needed after optimization of PIC in
+  // TurboAssembler::BranchAndLink method.
+
+  static constexpr int kOptimizedBranchAndLinkLongReturnOffset = 4 * kInstrSize;
 
   // Here we are patching the address in the LUI/ORI instruction pair.
   // These values are used in the serialization process and must be zero for
@@ -661,7 +665,7 @@ class Assembler : public AssemblerBase {
   static constexpr int kMaxCompactBranchOffset = (1 << (28 - 1)) - 1;
 
   static constexpr int kTrampolineSlotsSize =
-      kArchVariant == kMips64r6 ? 2 * kInstrSize : 8 * kInstrSize;
+      kArchVariant == kMips64r6 ? 2 * kInstrSize : 7 * kInstrSize;
 
   RegList* GetScratchRegisterList() { return &scratch_register_list_; }
 
@@ -763,6 +767,7 @@ class Assembler : public AssemblerBase {
     bltc(rs, rt, shifted_branch_offset(L));
   }
   void bltzal(Register rs, int16_t offset);
+  void nal() { bltzal(zero_reg, 0); }
   void blezalc(Register rt, int16_t offset);
   inline void blezalc(Register rt, Label* L) {
     blezalc(rt, shifted_branch_offset(L));
@@ -815,16 +820,17 @@ class Assembler : public AssemblerBase {
   // Never use the int16_t b(l)cond version with a branch offset
   // instead of using the Label* version.
 
-  // Jump targets must be in the current 256 MB-aligned region. i.e. 28 bits.
-  void j(int64_t target);
-  void jal(int64_t target);
-  void j(Label* target);
-  void jal(Label* target);
   void jalr(Register rs, Register rd = ra);
   void jr(Register target);
   void jic(Register rt, int16_t offset);
   void jialc(Register rt, int16_t offset);
 
+  // Following instructions are deprecated and require 256 MB
+  // code alignment. Use PC-relative instructions instead.
+  void j(int64_t target);
+  void jal(int64_t target);
+  void j(Label* target);
+  void jal(Label* target);
 
   // -------Data-processing-instructions---------
 
@@ -1837,6 +1843,7 @@ class Assembler : public AssemblerBase {
   static bool IsBranch(Instr instr);
   static bool IsMsaBranch(Instr instr);
   static bool IsBc(Instr instr);
+  static bool IsNal(Instr instr);
   static bool IsBzc(Instr instr);
 
   static bool IsBeq(Instr instr);
@@ -2273,8 +2280,7 @@ class Assembler : public AssemblerBase {
   friend class EnsureSpace;
 };
 
-
-class EnsureSpace BASE_EMBEDDED {
+class EnsureSpace {
  public:
   explicit inline EnsureSpace(Assembler* assembler);
 };

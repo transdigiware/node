@@ -12,6 +12,7 @@
 #include "src/handles-inl.h"
 #include "src/isolate.h"
 #include "src/objects-inl.h"
+#include "src/objects/js-array-buffer-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -88,7 +89,7 @@ void AtomicsWaitWakeHandle::Wake() {
 Object* FutexEmulation::Wait(Isolate* isolate,
                              Handle<JSArrayBuffer> array_buffer, size_t addr,
                              int32_t value, double rel_timeout_ms) {
-  DCHECK(addr < NumberToSize(array_buffer->byte_length()));
+  DCHECK_LT(addr, array_buffer->byte_length());
 
   void* backing_store = array_buffer->backing_store();
   int32_t* p =
@@ -222,7 +223,7 @@ Object* FutexEmulation::Wait(Isolate* isolate,
     }
 
     wait_list_.Pointer()->RemoveNode(node);
-  } while (0);
+  } while (false);
 
   isolate->RunAtomicsWaitCallback(callback_result, array_buffer, addr, value,
                                   rel_timeout_ms, nullptr);
@@ -235,10 +236,9 @@ Object* FutexEmulation::Wait(Isolate* isolate,
   return result;
 }
 
-Object* FutexEmulation::Wake(Isolate* isolate,
-                             Handle<JSArrayBuffer> array_buffer, size_t addr,
+Object* FutexEmulation::Wake(Handle<JSArrayBuffer> array_buffer, size_t addr,
                              uint32_t num_waiters_to_wake) {
-  DCHECK(addr < NumberToSize(array_buffer->byte_length()));
+  DCHECK_LT(addr, array_buffer->byte_length());
 
   int waiters_woken = 0;
   void* backing_store = array_buffer->backing_store();
@@ -261,11 +261,9 @@ Object* FutexEmulation::Wake(Isolate* isolate,
   return Smi::FromInt(waiters_woken);
 }
 
-
-Object* FutexEmulation::NumWaitersForTesting(Isolate* isolate,
-                                             Handle<JSArrayBuffer> array_buffer,
+Object* FutexEmulation::NumWaitersForTesting(Handle<JSArrayBuffer> array_buffer,
                                              size_t addr) {
-  DCHECK(addr < NumberToSize(array_buffer->byte_length()));
+  DCHECK_LT(addr, array_buffer->byte_length());
   void* backing_store = array_buffer->backing_store();
 
   base::LockGuard<base::Mutex> lock_guard(mutex_.Pointer());

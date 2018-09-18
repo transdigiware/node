@@ -17,7 +17,6 @@ namespace internal {
 namespace compiler {
 
 Reduction JSContextSpecialization::Reduce(Node* node) {
-  DisallowHeapAccess no_heap_access;
   switch (node->opcode()) {
     case IrOpcode::kParameter:
       return ReduceParameter(node);
@@ -101,7 +100,7 @@ bool IsContextParameter(Node* node) {
 // specialization context.  If successful, update {distance} to whatever
 // distance remains from the specialization context.
 base::Optional<ContextRef> GetSpecializationContext(
-    const JSHeapBroker* broker, Node* node, size_t* distance,
+    JSHeapBroker* broker, Node* node, size_t* distance,
     Maybe<OuterContext> maybe_outer) {
   switch (node->opcode()) {
     case IrOpcode::kHeapConstant: {
@@ -145,8 +144,9 @@ Reduction JSContextSpecialization::ReduceJSLoadContext(Node* node) {
 
   // Now walk up the concrete context chain for the remaining depth.
   ContextRef concrete = maybe_concrete.value();
+  concrete.Serialize();  // TODO(neis): Remove later.
   for (; depth > 0; --depth) {
-    concrete = concrete.previous().value();
+    concrete = concrete.previous();
   }
 
   if (!access.immutable()) {
@@ -206,8 +206,9 @@ Reduction JSContextSpecialization::ReduceJSStoreContext(Node* node) {
 
   // Now walk up the concrete context chain for the remaining depth.
   ContextRef concrete = maybe_concrete.value();
+  concrete.Serialize();  // TODO(neis): Remove later.
   for (; depth > 0; --depth) {
-    concrete = concrete.previous().value();
+    concrete = concrete.previous();
   }
 
   return SimplifyJSStoreContext(node, jsgraph()->Constant(concrete), depth);

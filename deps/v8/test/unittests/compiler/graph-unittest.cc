@@ -16,9 +16,10 @@ namespace compiler {
 GraphTest::GraphTest(int num_parameters)
     : TestWithNativeContext(),
       TestWithIsolateAndZone(),
+      canonical_(isolate()),
       common_(zone()),
       graph_(zone()),
-      js_heap_broker_(isolate()),
+      js_heap_broker_(isolate(), zone()),
       source_positions_(&graph_),
       node_origins_(&graph_) {
   graph()->SetStart(graph()->NewNode(common()->Start(num_parameters)));
@@ -26,7 +27,7 @@ GraphTest::GraphTest(int num_parameters)
 }
 
 
-GraphTest::~GraphTest() {}
+GraphTest::~GraphTest() = default;
 
 
 Node* GraphTest::Parameter(int32_t index) {
@@ -114,7 +115,7 @@ TypedGraphTest::TypedGraphTest(int num_parameters)
     : GraphTest(num_parameters),
       typer_(isolate(), js_heap_broker(), Typer::kNoFlags, graph()) {}
 
-TypedGraphTest::~TypedGraphTest() {}
+TypedGraphTest::~TypedGraphTest() = default;
 
 Node* TypedGraphTest::Parameter(Type type, int32_t index) {
   Node* node = GraphTest::Parameter(index);

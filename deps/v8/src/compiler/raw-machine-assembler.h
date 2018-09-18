@@ -47,7 +47,7 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
               FullUnalignedAccessSupport(),
       PoisoningMitigationLevel poisoning_level =
           PoisoningMitigationLevel::kPoisonCriticalOnly);
-  ~RawMachineAssembler() {}
+  ~RawMachineAssembler() = default;
 
   Isolate* isolate() const { return isolate_; }
   Graph* graph() const { return graph_; }
@@ -229,7 +229,7 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
   }
   Node* WordNot(Node* a) {
     if (machine()->Is32()) {
-      return Word32Not(a);
+      return Word32BitwiseNot(a);
     } else {
       return Word64Not(a);
     }
@@ -263,7 +263,7 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
   Node* Word32NotEqual(Node* a, Node* b) {
     return Word32BinaryNot(Word32Equal(a, b));
   }
-  Node* Word32Not(Node* a) { return Word32Xor(a, Int32Constant(-1)); }
+  Node* Word32BitwiseNot(Node* a) { return Word32Xor(a, Int32Constant(-1)); }
   Node* Word32BinaryNot(Node* a) { return Word32Equal(a, Int32Constant(0)); }
 
   Node* Word64And(Node* a, Node* b) {
@@ -605,11 +605,17 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
   Node* ChangeInt32ToFloat64(Node* a) {
     return AddNode(machine()->ChangeInt32ToFloat64(), a);
   }
+  Node* ChangeInt64ToFloat64(Node* a) {
+    return AddNode(machine()->ChangeInt64ToFloat64(), a);
+  }
   Node* ChangeUint32ToFloat64(Node* a) {
     return AddNode(machine()->ChangeUint32ToFloat64(), a);
   }
   Node* ChangeFloat64ToInt32(Node* a) {
     return AddNode(machine()->ChangeFloat64ToInt32(), a);
+  }
+  Node* ChangeFloat64ToInt64(Node* a) {
+    return AddNode(machine()->ChangeFloat64ToInt64(), a);
   }
   Node* ChangeFloat64ToUint32(Node* a) {
     return AddNode(machine()->ChangeFloat64ToUint32(), a);
@@ -711,10 +717,10 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
     return AddNode(machine()->Float64RoundTiesEven().op(), a);
   }
   Node* Word32ReverseBytes(Node* a) {
-    return AddNode(machine()->Word32ReverseBytes().op(), a);
+    return AddNode(machine()->Word32ReverseBytes(), a);
   }
   Node* Word64ReverseBytes(Node* a) {
-    return AddNode(machine()->Word64ReverseBytes().op(), a);
+    return AddNode(machine()->Word64ReverseBytes(), a);
   }
 
   // Float64 bit operations.

@@ -587,7 +587,7 @@ size_t InstructionSelector::AddOperandToStateValueDescriptor(
         }
         return entries;
       } else {
-        // Crankshaft counts duplicate objects for the running id, so we have
+        // Deoptimizer counts duplicate objects for the running id, so we have
         // to push the input again.
         deduplicator->InsertObject(input);
         values->PushDuplicate(id);
@@ -1081,6 +1081,7 @@ void InstructionSelector::VisitBlock(BasicBlock* block) {
     std::reverse(instructions_.begin() + instruction_start,
                  instructions_.end());
     if (!node) return true;
+    if (!source_positions_) return true;
     SourcePosition source_position = source_positions_->GetSourcePosition(node);
     if (source_position.IsKnown() && IsSourcePositionUsed(node)) {
       sequence()->SetSourcePosition(instructions_[instruction_start],
@@ -1467,10 +1468,14 @@ void InstructionSelector::VisitNode(Node* node) {
       return MarkAsFloat64(node), VisitChangeFloat32ToFloat64(node);
     case IrOpcode::kChangeInt32ToFloat64:
       return MarkAsFloat64(node), VisitChangeInt32ToFloat64(node);
+    case IrOpcode::kChangeInt64ToFloat64:
+      return MarkAsFloat64(node), VisitChangeInt64ToFloat64(node);
     case IrOpcode::kChangeUint32ToFloat64:
       return MarkAsFloat64(node), VisitChangeUint32ToFloat64(node);
     case IrOpcode::kChangeFloat64ToInt32:
       return MarkAsWord32(node), VisitChangeFloat64ToInt32(node);
+    case IrOpcode::kChangeFloat64ToInt64:
+      return MarkAsWord64(node), VisitChangeFloat64ToInt64(node);
     case IrOpcode::kChangeFloat64ToUint32:
       return MarkAsWord32(node), VisitChangeFloat64ToUint32(node);
     case IrOpcode::kChangeFloat64ToUint64:
@@ -1705,11 +1710,18 @@ void InstructionSelector::VisitNode(Node* node) {
       return VisitWord32AtomicStore(node);
     case IrOpcode::kWord64AtomicStore:
       return VisitWord64AtomicStore(node);
-#define ATOMIC_CASE(name, rep)                               \
-  case IrOpcode::k##rep##Atomic##name: {                     \
-    MachineType type = AtomicOpRepresentationOf(node->op()); \
-    MarkAsRepresentation(type.representation(), node);       \
-    return Visit##rep##Atomic##name(node);                   \
+    case IrOpcode::kWord32AtomicPairStore:
+      return VisitWord32AtomicPairStore(node);
+    case IrOpcode::kWord32AtomicPairLoad: {
+      MarkAsWord32(node);
+      MarkPairProjectionsAsWord32(node);
+      return VisitWord32AtomicPairLoad(node);
+    }
+#define ATOMIC_CASE(name, rep)                         \
+  case IrOpcode::k##rep##Atomic##name: {               \
+    MachineType type = AtomicOpType(node->op());       \
+    MarkAsRepresentation(type.representation(), node); \
+    return Visit##rep##Atomic##name(node);             \
   }
       ATOMIC_CASE(Add, Word32)
       ATOMIC_CASE(Add, Word64)
@@ -1725,6 +1737,20 @@ void InstructionSelector::VisitNode(Node* node) {
       ATOMIC_CASE(Exchange, Word64)
       ATOMIC_CASE(CompareExchange, Word32)
       ATOMIC_CASE(CompareExchange, Word64)
+#undef ATOMIC_CASE
+#define ATOMIC_CASE(name)                     \
+  case IrOpcode::kWord32AtomicPair##name: {   \
+    MarkAsWord32(node);                       \
+    MarkPairProjectionsAsWord32(node);        \
+    return VisitWord32AtomicPair##name(node); \
+  }
+      ATOMIC_CASE(Add)
+      ATOMIC_CASE(Sub)
+      ATOMIC_CASE(And)
+      ATOMIC_CASE(Or)
+      ATOMIC_CASE(Xor)
+      ATOMIC_CASE(Exchange)
+      ATOMIC_CASE(CompareExchange)
 #undef ATOMIC_CASE
     case IrOpcode::kSpeculationFence:
       return VisitSpeculationFence(node);
@@ -2263,8 +2289,15 @@ void InstructionSelector::VisitChangeInt32ToInt64(Node* node) {
   UNIMPLEMENTED();
 }
 
+void InstructionSelector::VisitChangeInt64ToFloat64(Node* node) {
+  UNIMPLEMENTED();
+}
 
 void InstructionSelector::VisitChangeUint32ToUint64(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitChangeFloat64ToInt64(Node* node) {
   UNIMPLEMENTED();
 }
 
@@ -2352,6 +2385,44 @@ void InstructionSelector::VisitWord32PairShr(Node* node) { UNIMPLEMENTED(); }
 
 void InstructionSelector::VisitWord32PairSar(Node* node) { UNIMPLEMENTED(); }
 #endif  // V8_TARGET_ARCH_64_BIT
+
+#if !V8_TARGET_ARCH_IA32 && !V8_TARGET_ARCH_ARM
+void InstructionSelector::VisitWord32AtomicPairLoad(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairStore(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairAdd(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairSub(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairAnd(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairOr(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairXor(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairExchange(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairCompareExchange(Node* node) {
+  UNIMPLEMENTED();
+}
+#endif  // !V8_TARGET_ARCH_IA32 && !V8_TARGET_ARCH_ARM
 
 #if !V8_TARGET_ARCH_ARM && !V8_TARGET_ARCH_ARM64 && !V8_TARGET_ARCH_MIPS && \
     !V8_TARGET_ARCH_MIPS64 && !V8_TARGET_ARCH_IA32

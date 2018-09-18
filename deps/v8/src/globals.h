@@ -11,37 +11,11 @@
 #include <limits>
 #include <ostream>
 
-#include "include/v8.h"
+#include "include/v8-internal.h"
 #include "src/base/build_config.h"
 #include "src/base/flags.h"
 #include "src/base/logging.h"
 #include "src/base/macros.h"
-
-#ifdef V8_OS_WIN
-
-// Setup for Windows shared library export.
-#ifdef BUILDING_V8_SHARED
-#define V8_EXPORT_PRIVATE __declspec(dllexport)
-#elif USING_V8_SHARED
-#define V8_EXPORT_PRIVATE __declspec(dllimport)
-#else
-#define V8_EXPORT_PRIVATE
-#endif  // BUILDING_V8_SHARED
-
-#else  // V8_OS_WIN
-
-// Setup for Linux shared library export.
-#if V8_HAS_ATTRIBUTE_VISIBILITY
-#ifdef BUILDING_V8_SHARED
-#define V8_EXPORT_PRIVATE __attribute__((visibility("default")))
-#else
-#define V8_EXPORT_PRIVATE
-#endif
-#else
-#define V8_EXPORT_PRIVATE
-#endif
-
-#endif  // V8_OS_WIN
 
 #define V8_INFINITY std::numeric_limits<double>::infinity()
 
@@ -121,10 +95,6 @@ class AllStatic {
 #endif
 };
 
-// DEPRECATED
-// TODO(leszeks): Delete this during a quiet period
-#define BASE_EMBEDDED
-
 typedef uint8_t byte;
 typedef uintptr_t Address;
 static const Address kNullAddress = 0;
@@ -192,13 +162,7 @@ constexpr intptr_t kIntptrSignBit =
     static_cast<intptr_t>(uintptr_t{0x8000000000000000});
 constexpr uintptr_t kUintptrAllBitsSet = uintptr_t{0xFFFFFFFFFFFFFFFF};
 constexpr bool kRequiresCodeRange = true;
-#if V8_TARGET_ARCH_MIPS64
-// To use pseudo-relative jumps such as j/jal instructions which have 28-bit
-// encoded immediate, the addresses have to be in range of 256MB aligned
-// region. Used only for large object space.
-constexpr size_t kMaximalCodeRangeSize = 256 * MB;
-constexpr size_t kCodeRangeAreaAlignment = 256 * MB;
-#elif V8_HOST_ARCH_PPC && V8_TARGET_ARCH_PPC && V8_OS_LINUX
+#if V8_HOST_ARCH_PPC && V8_TARGET_ARCH_PPC && V8_OS_LINUX
 constexpr size_t kMaximalCodeRangeSize = 512 * MB;
 constexpr size_t kCodeRangeAreaAlignment = 64 * KB;  // OS page on PPC Linux
 #elif V8_TARGET_ARCH_ARM64
@@ -239,8 +203,8 @@ constexpr size_t kCodeRangeAreaAlignment = 4 * KB;  // OS page.
 constexpr size_t kReservedCodeRangePages = 0;
 #endif
 
-// Trigger an incremental GCs once the external memory reaches this limit.
-constexpr int kExternalAllocationSoftLimit = 64 * MB;
+constexpr int kExternalAllocationSoftLimit =
+    internal::Internals::kExternalAllocationSoftLimit;
 
 // Maximum object size that gets allocated into regular pages. Objects larger
 // than that size are allocated in large object space and are never moved in
@@ -365,6 +329,10 @@ inline LanguageMode stricter_language_mode(LanguageMode mode1,
                                    static_cast<int>(mode2));
 }
 
+// A non-keyed store is of the form a.x = foo or a["x"] = foo whereas
+// a keyed store is of the form a[expression] = foo.
+enum class StoreOrigin { kMaybeKeyed, kNamed };
+
 enum TypeofMode : int { INSIDE_TYPEOF, NOT_INSIDE_TYPEOF };
 
 // Enums used by CEntry.
@@ -487,6 +455,9 @@ constexpr uint32_t kFreeListZapValue = 0xfeed1eaf;
 
 constexpr int kCodeZapValue = 0xbadc0de;
 constexpr uint32_t kPhantomReferenceZap = 0xca11bac;
+
+// Page constants.
+static const intptr_t kPageAlignmentMask = (intptr_t{1} << kPageSizeBits) - 1;
 
 // On Intel architecture, cache line size is 64 bytes.
 // On ARM it may be less (32 bytes), but as far this constant is
@@ -732,6 +703,27 @@ enum InlineCacheState {
   GENERIC,
 };
 
+// Printing support.
+inline const char* InlineCacheState2String(InlineCacheState state) {
+  switch (state) {
+    case UNINITIALIZED:
+      return "UNINITIALIZED";
+    case PREMONOMORPHIC:
+      return "PREMONOMORPHIC";
+    case MONOMORPHIC:
+      return "MONOMORPHIC";
+    case RECOMPUTE_HANDLER:
+      return "RECOMPUTE_HANDLER";
+    case POLYMORPHIC:
+      return "POLYMORPHIC";
+    case MEGAMORPHIC:
+      return "MEGAMORPHIC";
+    case GENERIC:
+      return "GENERIC";
+  }
+  UNREACHABLE();
+}
+
 enum WhereToStart { kStartAtReceiver, kStartAtPrototype };
 
 enum ResultSentinel { kNotFound = -1, kUnsupported = -2 };
@@ -953,6 +945,8 @@ enum AllocationSiteMode {
   LAST_ALLOCATION_SITE_MODE = TRACK_ALLOCATION_SITE
 };
 
+enum class AllocationSiteUpdateMode { kUpdate, kCheckOnly };
+
 // The mips architecture prior to revision 5 has inverted encoding for sNaN.
 #if (V8_TARGET_ARCH_MIPS && !defined(_MIPS_ARCH_MIPS32R6) &&           \
      (!defined(USE_SIMULATOR) || !defined(_MIPS_TARGET_SIMULATOR))) || \
@@ -1101,7 +1095,6 @@ enum InitializationFlag : uint8_t { kNeedsInitialization, kCreatedInitialized };
 
 enum MaybeAssignedFlag : uint8_t { kNotAssigned, kMaybeAssigned };
 
-// Serialized in PreparseData, so numeric values should not be changed.
 enum ParseErrorType { kSyntaxError = 0, kReferenceError = 1 };
 
 enum FunctionKind : uint8_t {
@@ -1551,7 +1544,7 @@ V8_INLINE static bool HasWeakHeapObjectTag(const Object* value) {
           kWeakHeapObjectTag);
 }
 
-V8_INLINE static bool IsClearedWeakHeapObject(MaybeObject* value) {
+V8_INLINE static bool IsClearedWeakHeapObject(const MaybeObject* value) {
   return reinterpret_cast<intptr_t>(value) == kClearedWeakHeapObject;
 }
 
@@ -1594,6 +1587,7 @@ enum class LoadSensitivity {
 #define FOREACH_WASM_TRAPREASON(V) \
   V(TrapUnreachable)               \
   V(TrapMemOutOfBounds)            \
+  V(TrapUnalignedAccess)           \
   V(TrapDivByZero)                 \
   V(TrapDivUnrepresentable)        \
   V(TrapRemByZero)                 \

@@ -166,9 +166,31 @@ std::ostream& operator<<(std::ostream& os, CheckFloat64HoleMode mode) {
   UNREACHABLE();
 }
 
-CheckFloat64HoleMode CheckFloat64HoleModeOf(const Operator* op) {
+CheckFloat64HoleParameters const& CheckFloat64HoleParametersOf(
+    Operator const* op) {
   DCHECK_EQ(IrOpcode::kCheckFloat64Hole, op->opcode());
-  return OpParameter<CheckFloat64HoleMode>(op);
+  return OpParameter<CheckFloat64HoleParameters>(op);
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         CheckFloat64HoleParameters const& params) {
+  os << params.mode();
+  if (params.feedback().IsValid()) os << "; " << params.feedback();
+  return os;
+}
+
+size_t hash_value(const CheckFloat64HoleParameters& params) {
+  return base::hash_combine(params.mode(), params.feedback());
+}
+
+bool operator==(CheckFloat64HoleParameters const& lhs,
+                CheckFloat64HoleParameters const& rhs) {
+  return lhs.mode() == rhs.mode() && lhs.feedback() == rhs.feedback();
+}
+
+bool operator!=(CheckFloat64HoleParameters const& lhs,
+                CheckFloat64HoleParameters const& rhs) {
+  return !(lhs == rhs);
 }
 
 CheckForMinusZeroMode CheckMinusZeroModeOf(const Operator* op) {
@@ -687,6 +709,7 @@ bool operator==(CheckMinusZeroParameters const& lhs,
   V(NumberToUint32, Operator::kNoProperties, 1, 0)               \
   V(NumberToUint8Clamped, Operator::kNoProperties, 1, 0)         \
   V(NumberSilenceNaN, Operator::kNoProperties, 1, 0)             \
+  V(StringConcat, Operator::kNoProperties, 3, 0)                 \
   V(StringToNumber, Operator::kNoProperties, 1, 0)               \
   V(StringFromSingleCharCode, Operator::kNoProperties, 1, 0)     \
   V(StringIndexOf, Operator::kNoProperties, 3, 0)                \
@@ -698,14 +721,18 @@ bool operator==(CheckMinusZeroParameters const& lhs,
   V(PlainPrimitiveToWord32, Operator::kNoProperties, 1, 0)       \
   V(PlainPrimitiveToFloat64, Operator::kNoProperties, 1, 0)      \
   V(ChangeTaggedSignedToInt32, Operator::kNoProperties, 1, 0)    \
+  V(ChangeTaggedSignedToInt64, Operator::kNoProperties, 1, 0)    \
   V(ChangeTaggedToInt32, Operator::kNoProperties, 1, 0)          \
+  V(ChangeTaggedToInt64, Operator::kNoProperties, 1, 0)          \
   V(ChangeTaggedToUint32, Operator::kNoProperties, 1, 0)         \
   V(ChangeTaggedToFloat64, Operator::kNoProperties, 1, 0)        \
   V(ChangeTaggedToTaggedSigned, Operator::kNoProperties, 1, 0)   \
   V(ChangeFloat64ToTaggedPointer, Operator::kNoProperties, 1, 0) \
   V(ChangeInt31ToTaggedSigned, Operator::kNoProperties, 1, 0)    \
   V(ChangeInt32ToTagged, Operator::kNoProperties, 1, 0)          \
+  V(ChangeInt64ToTagged, Operator::kNoProperties, 1, 0)          \
   V(ChangeUint32ToTagged, Operator::kNoProperties, 1, 0)         \
+  V(ChangeUint64ToTagged, Operator::kNoProperties, 1, 0)         \
   V(ChangeTaggedToBit, Operator::kNoProperties, 1, 0)            \
   V(ChangeBitToTagged, Operator::kNoProperties, 1, 0)            \
   V(TruncateTaggedToBit, Operator::kNoProperties, 1, 0)          \
@@ -776,11 +803,15 @@ bool operator==(CheckMinusZeroParameters const& lhs,
   V(CheckSmi, 1, 1)                      \
   V(CheckString, 1, 1)                   \
   V(CheckedInt32ToTaggedSigned, 1, 1)    \
+  V(CheckedInt64ToInt32, 1, 1)           \
+  V(CheckedInt64ToTaggedSigned, 1, 1)    \
   V(CheckedTaggedSignedToInt32, 1, 1)    \
   V(CheckedTaggedToTaggedPointer, 1, 1)  \
   V(CheckedTaggedToTaggedSigned, 1, 1)   \
   V(CheckedUint32ToInt32, 1, 1)          \
-  V(CheckedUint32ToTaggedSigned, 1, 1)
+  V(CheckedUint32ToTaggedSigned, 1, 1)   \
+  V(CheckedUint64ToInt32, 1, 1)          \
+  V(CheckedUint64ToTaggedSigned, 1, 1)
 
 struct SimplifiedOperatorGlobalCache final {
 #define PURE(Name, properties, value_input_count, control_input_count)     \
@@ -868,13 +899,6 @@ struct SimplifiedOperatorGlobalCache final {
       kStringFromSingleCodePointOperatorUTF16;
   StringFromSingleCodePointOperator<UnicodeEncoding::UTF32>
       kStringFromSingleCodePointOperatorUTF32;
-
-  struct ArrayBufferWasNeuteredOperator final : public Operator {
-    ArrayBufferWasNeuteredOperator()
-        : Operator(IrOpcode::kArrayBufferWasNeutered, Operator::kEliminatable,
-                   "ArrayBufferWasNeutered", 1, 1, 1, 1, 1, 0) {}
-  };
-  ArrayBufferWasNeuteredOperator kArrayBufferWasNeutered;
 
   struct FindOrderedHashMapEntryOperator final : public Operator {
     FindOrderedHashMapEntryOperator()
@@ -1005,12 +1029,13 @@ struct SimplifiedOperatorGlobalCache final {
 
   template <CheckFloat64HoleMode kMode>
   struct CheckFloat64HoleNaNOperator final
-      : public Operator1<CheckFloat64HoleMode> {
+      : public Operator1<CheckFloat64HoleParameters> {
     CheckFloat64HoleNaNOperator()
-        : Operator1<CheckFloat64HoleMode>(
+        : Operator1<CheckFloat64HoleParameters>(
               IrOpcode::kCheckFloat64Hole,
               Operator::kFoldable | Operator::kNoThrow, "CheckFloat64Hole", 1,
-              1, 1, 1, 1, 0, kMode) {}
+              1, 1, 1, 1, 0,
+              CheckFloat64HoleParameters(kMode, VectorSlotPair())) {}
   };
   CheckFloat64HoleNaNOperator<CheckFloat64HoleMode::kAllowReturnHole>
       kCheckFloat64HoleAllowReturnHoleOperator;
@@ -1101,7 +1126,6 @@ SimplifiedOperatorBuilder::SimplifiedOperatorBuilder(Zone* zone)
 PURE_OP_LIST(GET_FROM_CACHE)
 EFFECT_DEPENDENT_OP_LIST(GET_FROM_CACHE)
 CHECKED_OP_LIST(GET_FROM_CACHE)
-GET_FROM_CACHE(ArrayBufferWasNeutered)
 GET_FROM_CACHE(ArgumentsFrame)
 GET_FROM_CACHE(FindOrderedHashMapEntry)
 GET_FROM_CACHE(FindOrderedHashMapEntryForInt32Key)
@@ -1289,14 +1313,20 @@ const Operator* SimplifiedOperatorBuilder::ConvertReceiver(
 }
 
 const Operator* SimplifiedOperatorBuilder::CheckFloat64Hole(
-    CheckFloat64HoleMode mode) {
-  switch (mode) {
-    case CheckFloat64HoleMode::kAllowReturnHole:
-      return &cache_.kCheckFloat64HoleAllowReturnHoleOperator;
-    case CheckFloat64HoleMode::kNeverReturnHole:
-      return &cache_.kCheckFloat64HoleNeverReturnHoleOperator;
+    CheckFloat64HoleMode mode, VectorSlotPair const& feedback) {
+  if (!feedback.IsValid()) {
+    switch (mode) {
+      case CheckFloat64HoleMode::kAllowReturnHole:
+        return &cache_.kCheckFloat64HoleAllowReturnHoleOperator;
+      case CheckFloat64HoleMode::kNeverReturnHole:
+        return &cache_.kCheckFloat64HoleNeverReturnHoleOperator;
+    }
+    UNREACHABLE();
   }
-  UNREACHABLE();
+  return new (zone()) Operator1<CheckFloat64HoleParameters>(
+      IrOpcode::kCheckFloat64Hole, Operator::kFoldable | Operator::kNoThrow,
+      "CheckFloat64Hole", 1, 1, 1, 1, 1, 0,
+      CheckFloat64HoleParameters(mode, feedback));
 }
 
 const Operator* SimplifiedOperatorBuilder::SpeculativeToNumber(

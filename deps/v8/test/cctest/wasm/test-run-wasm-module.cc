@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/objects-inl.h"
 #include "src/snapshot/code-serializer.h"
 #include "src/version.h"
@@ -198,8 +198,8 @@ TEST(Run_WasmModule_Global) {
     TestSignatures sigs;
 
     WasmModuleBuilder* builder = new (&zone) WasmModuleBuilder(&zone);
-    uint32_t global1 = builder->AddGlobal(kWasmI32, 0);
-    uint32_t global2 = builder->AddGlobal(kWasmI32, 0);
+    uint32_t global1 = builder->AddGlobal(kWasmI32, false);
+    uint32_t global2 = builder->AddGlobal(kWasmI32, false);
     WasmFunctionBuilder* f1 = builder->AddFunction(sigs.i_v());
     byte code1[] = {
         WASM_I32_ADD(WASM_GET_GLOBAL(global1), WASM_GET_GLOBAL(global2))};
@@ -284,7 +284,7 @@ class InterruptThread : public v8::base::Thread {
     WriteLittleEndianValue<int32_t>(ptr, interrupt_value_);
   }
 
-  virtual void Run() {
+  void Run() override {
     // Wait for the main thread to write the signal value.
     int32_t val = 0;
     do {
@@ -771,7 +771,7 @@ TEST(Run_WasmModule_Buffer_Externalized_GrowMem) {
     uint32_t result = WasmMemoryObject::Grow(isolate, memory_object, 4);
     CHECK_EQ(16, result);
     CHECK(buffer1.buffer_->was_neutered());  // growing always neuters
-    CHECK_EQ(0, buffer1.buffer_->byte_length()->Number());
+    CHECK_EQ(0, buffer1.buffer_->byte_length());
 
     CHECK_NE(*buffer1.buffer_, memory_object->array_buffer());
 
@@ -782,7 +782,7 @@ TEST(Run_WasmModule_Buffer_Externalized_GrowMem) {
     result = testing::RunWasmModuleForTesting(isolate, instance, 0, nullptr);
     CHECK_EQ(26, result);
     CHECK(buffer2.buffer_->was_neutered());  // growing always neuters
-    CHECK_EQ(0, buffer2.buffer_->byte_length()->Number());
+    CHECK_EQ(0, buffer2.buffer_->byte_length());
     CHECK_NE(*buffer2.buffer_, memory_object->array_buffer());
   }
   Cleanup();
@@ -886,9 +886,11 @@ TEST(AtomicOpDisassembly) {
     testing::SetupIsolateForWasmModule(isolate);
 
     ErrorThrower thrower(isolate, "Test");
+    auto enabled_features = WasmFeaturesFromIsolate(isolate);
     MaybeHandle<WasmModuleObject> module_object =
         isolate->wasm_engine()->SyncCompile(
-            isolate, &thrower, ModuleWireBytes(buffer.begin(), buffer.end()));
+            isolate, enabled_features, &thrower,
+            ModuleWireBytes(buffer.begin(), buffer.end()));
 
     module_object.ToHandleChecked()->DisassembleFunction(0);
   }

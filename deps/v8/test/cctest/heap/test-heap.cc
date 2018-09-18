@@ -28,7 +28,7 @@
 #include <stdlib.h>
 #include <utility>
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/assembler-inl.h"
 #include "src/code-stubs.h"
 #include "src/compilation-cache.h"
@@ -43,9 +43,11 @@
 #include "src/heap/incremental-marking.h"
 #include "src/heap/mark-compact.h"
 #include "src/heap/memory-reducer.h"
+#include "src/heap/remembered-set.h"
 #include "src/ic/ic.h"
 #include "src/macro-assembler-inl.h"
 #include "src/objects-inl.h"
+#include "src/objects/js-array-inl.h"
 #include "src/objects/js-collection-inl.h"
 #include "src/objects/managed.h"
 #include "src/regexp/jsregexp.h"
@@ -787,7 +789,7 @@ TEST(BytecodeArray) {
   CHECK_GE(array->address() + array->BytecodeArraySize(),
            array->GetFirstBytecodeAddress() + array->length());
   for (int i = 0; i < kRawBytesSize; i++) {
-    CHECK_EQ(Memory::uint8_at(array->GetFirstBytecodeAddress() + i),
+    CHECK_EQ(Memory<uint8_t>(array->GetFirstBytecodeAddress() + i),
              kRawBytes[i]);
     CHECK_EQ(array->get(i), kRawBytes[i]);
   }
@@ -805,7 +807,7 @@ TEST(BytecodeArray) {
   CHECK_EQ(array->frame_size(), kFrameSize);
   for (int i = 0; i < kRawBytesSize; i++) {
     CHECK_EQ(array->get(i), kRawBytes[i]);
-    CHECK_EQ(Memory::uint8_at(array->GetFirstBytecodeAddress() + i),
+    CHECK_EQ(Memory<uint8_t>(array->GetFirstBytecodeAddress() + i),
              kRawBytes[i]);
   }
 
@@ -896,14 +898,14 @@ static const char* not_so_random_string_table[] = {
   "volatile",
   "while",
   "with",
-  0
+  nullptr
 };
-
 
 static void CheckInternalizedStrings(const char** strings) {
   Isolate* isolate = CcTest::i_isolate();
   Factory* factory = isolate->factory();
-  for (const char* string = *strings; *strings != 0; string = *strings++) {
+  for (const char* string = *strings; *strings != nullptr;
+       string = *strings++) {
     HandleScope scope(isolate);
     Handle<String> a =
         isolate->factory()->InternalizeUtf8String(CStrVector(string));
@@ -2191,7 +2193,7 @@ HEAP_TEST(GCFlags) {
   CHECK_EQ(Heap::kNoGCFlags, heap->current_gc_flags_);
 
   // Set the flags to check whether we appropriately resets them after the GC.
-  heap->set_current_gc_flags(Heap::kAbortIncrementalMarkingMask);
+  heap->set_current_gc_flags(Heap::kFinalizeIncrementalMarkingMask);
   CcTest::CollectAllGarbage(Heap::kReduceMemoryFootprintMask);
   CHECK_EQ(Heap::kNoGCFlags, heap->current_gc_flags_);
 
@@ -2210,7 +2212,7 @@ HEAP_TEST(GCFlags) {
   // NewSpace scavenges should not overwrite the flags.
   CHECK_NE(0, heap->current_gc_flags_ & Heap::kReduceMemoryFootprintMask);
 
-  CcTest::CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
+  CcTest::CollectAllGarbage(Heap::kFinalizeIncrementalMarkingMask);
   CHECK_EQ(Heap::kNoGCFlags, heap->current_gc_flags_);
 }
 
@@ -3095,14 +3097,14 @@ TEST(IncrementalMarkingPreservesMonomorphicCallIC) {
   CHECK_EQ(expected_slots, feedback_helper.slot_count());
   int slot1 = 0;
   int slot2 = 1;
-  CHECK(feedback_vector->Get(feedback_helper.slot(slot1))->IsWeakHeapObject());
-  CHECK(feedback_vector->Get(feedback_helper.slot(slot2))->IsWeakHeapObject());
+  CHECK(feedback_vector->Get(feedback_helper.slot(slot1))->IsWeak());
+  CHECK(feedback_vector->Get(feedback_helper.slot(slot2))->IsWeak());
 
   heap::SimulateIncrementalMarking(CcTest::heap());
   CcTest::CollectAllGarbage();
 
-  feedback_vector->Get(feedback_helper.slot(slot1))->IsWeakHeapObject();
-  feedback_vector->Get(feedback_helper.slot(slot2))->IsWeakHeapObject();
+  CHECK(feedback_vector->Get(feedback_helper.slot(slot1))->IsWeak());
+  CHECK(feedback_vector->Get(feedback_helper.slot(slot2))->IsWeak());
 }
 
 
@@ -3132,12 +3134,12 @@ TEST(IncrementalMarkingPreservesMonomorphicConstructor) {
           CcTest::global()->Get(ctx, v8_str("f")).ToLocalChecked())));
 
   Handle<FeedbackVector> vector(f->feedback_vector(), f->GetIsolate());
-  CHECK(vector->Get(FeedbackSlot(0))->IsWeakOrClearedHeapObject());
+  CHECK(vector->Get(FeedbackSlot(0))->IsWeakOrCleared());
 
   heap::SimulateIncrementalMarking(CcTest::heap());
   CcTest::CollectAllGarbage();
 
-  CHECK(vector->Get(FeedbackSlot(0))->IsWeakOrClearedHeapObject());
+  CHECK(vector->Get(FeedbackSlot(0))->IsWeakOrCleared());
 }
 
 TEST(IncrementalMarkingPreservesMonomorphicIC) {
@@ -3245,14 +3247,14 @@ class SourceResource : public v8::String::ExternalOneByteStringResource {
   explicit SourceResource(const char* data)
     : data_(data), length_(strlen(data)) { }
 
-  virtual void Dispose() {
+  void Dispose() override {
     i::DeleteArray(data_);
     data_ = nullptr;
   }
 
-  const char* data() const { return data_; }
+  const char* data() const override { return data_; }
 
-  size_t length() const { return length_; }
+  size_t length() const override { return length_; }
 
   bool IsDisposed() { return data_ == nullptr; }
 
@@ -3628,15 +3630,15 @@ TEST(EnsureAllocationSiteDependentCodesProcessed) {
 
     int dependency_group_count = 0;
     DependentCode* dependency = site->dependent_code();
-    while (dependency != ReadOnlyRoots(heap).empty_fixed_array()) {
+    while (dependency != ReadOnlyRoots(heap).empty_weak_fixed_array()) {
       CHECK(dependency->group() ==
                 DependentCode::kAllocationSiteTransitionChangedGroup ||
             dependency->group() ==
                 DependentCode::kAllocationSiteTenuringChangedGroup);
       CHECK_EQ(1, dependency->count());
-      CHECK(dependency->object_at(0)->IsWeakCell());
+      CHECK(dependency->object_at(0)->IsWeak());
       Code* function_bar =
-          Code::cast(WeakCell::cast(dependency->object_at(0))->value());
+          Code::cast(dependency->object_at(0)->GetHeapObjectAssumeWeak());
       CHECK_EQ(bar_handle->code(), function_bar);
       dependency = dependency->next_link();
       dependency_group_count++;
@@ -3653,8 +3655,7 @@ TEST(EnsureAllocationSiteDependentCodesProcessed) {
 
   // The site still exists because of our global handle, but the code is no
   // longer referred to by dependent_code().
-  CHECK(site->dependent_code()->object_at(0)->IsWeakCell() &&
-        WeakCell::cast(site->dependent_code()->object_at(0))->cleared());
+  CHECK(site->dependent_code()->object_at(0)->IsCleared());
 }
 
 void CheckNumberOfAllocations(Heap* heap, const char* source,
@@ -3678,19 +3679,50 @@ TEST(AllocationSiteCreation) {
   Isolate* isolate = CcTest::i_isolate();
   Heap* heap = isolate->heap();
   HandleScope scope(isolate);
+  i::FLAG_enable_one_shot_optimization = true;
 
   // Array literals.
-  CheckNumberOfAllocations(heap, "(function f1() { return []; })()", 1, 0);
-  CheckNumberOfAllocations(heap, "(function f2() { return [1, 2]; })()", 1, 0);
-  CheckNumberOfAllocations(heap, "(function f3() { return [[1], [2]]; })()", 1,
-                           2);
+  CheckNumberOfAllocations(heap, "function f1() { return []; }; f1()", 1, 0);
+  CheckNumberOfAllocations(heap, "function f2() { return [1, 2]; }; f2()", 1,
+                           0);
+  CheckNumberOfAllocations(heap, "function f3() { return [[1], [2]]; }; f3()",
+                           1, 2);
 
   CheckNumberOfAllocations(heap,
-                           "(function f4() { "
+                           "function f4() { "
                            "return [0, [1, 1.1, 1.2, "
                            "], 1.5, [2.1, 2.2], 3];"
-                           "})()",
+                           "}; f4();",
                            1, 2);
+
+  // No allocation sites within IIFE/top-level
+  CheckNumberOfAllocations(heap,
+                           R"(
+                            (function f4() {
+                              return [ 0, [ 1, 1.1, 1.2,], 1.5, [2.1, 2.2], 3 ];
+                            })();
+                            )",
+                           0, 0);
+
+  CheckNumberOfAllocations(heap,
+                           R"(
+                            l = [ 1, 2, 3, 4];
+                            )",
+                           0, 0);
+
+  CheckNumberOfAllocations(heap,
+                           R"(
+                            a = [];
+                            )",
+                           0, 0);
+
+  CheckNumberOfAllocations(heap,
+                           R"(
+                            (function f4() {
+                              return [];
+                            })();
+                            )",
+                           0, 0);
 
   // Object literals have lazy AllocationSites
   CheckNumberOfAllocations(heap, "function f5() { return {}; }; f5(); ", 0, 0);
@@ -3727,6 +3759,52 @@ TEST(AllocationSiteCreation) {
 
   // No new AllocationSites created on the second invocation.
   CheckNumberOfAllocations(heap, "f9(); ", 0, 0);
+
+  // No allocation sites for literals in an iife/top level code even if it has
+  // array subliterals
+  CheckNumberOfAllocations(heap,
+                           R"(
+                            (function f10() {
+                              return {a: [1], b: [2]};
+                            })();
+                            )",
+                           0, 0);
+
+  CheckNumberOfAllocations(heap,
+                           R"(
+                            l = {
+                              a: 1,
+                              b: {
+                                c: [5],
+                              }
+                            };
+                            )",
+                           0, 0);
+
+  // Eagerly create allocation sites for literals within a loop of iife or
+  // top-level code
+  CheckNumberOfAllocations(heap,
+                           R"(
+                            (function f11() {
+                              while(true) {
+                                return {a: [1], b: [2]};
+                              }
+                            })();
+                            )",
+                           1, 2);
+
+  CheckNumberOfAllocations(heap,
+                           R"(
+                            for (i = 0; i < 1; ++i) {
+                              l = {
+                                a: 1,
+                                b: {
+                                  c: [5],
+                                }
+                              };
+                            }
+                            )",
+                           1, 1);
 }
 
 TEST(CellsInOptimizedCodeAreWeak) {
@@ -4055,18 +4133,18 @@ TEST(WeakFunctionInConstructor) {
       Handle<FeedbackVector>(createObj->feedback_vector(), CcTest::i_isolate());
   for (int i = 0; i < 20; i++) {
     MaybeObject* slot_value = feedback_vector->Get(FeedbackSlot(0));
-    CHECK(slot_value->IsWeakOrClearedHeapObject());
-    if (slot_value->IsClearedWeakHeapObject()) break;
+    CHECK(slot_value->IsWeakOrCleared());
+    if (slot_value->IsCleared()) break;
     CcTest::CollectAllGarbage();
   }
 
   MaybeObject* slot_value = feedback_vector->Get(FeedbackSlot(0));
-  CHECK(slot_value->IsClearedWeakHeapObject());
+  CHECK(slot_value->IsCleared());
   CompileRun(
       "function coat() { this.x = 6; }"
       "createObj(coat);");
   slot_value = feedback_vector->Get(FeedbackSlot(0));
-  CHECK(slot_value->IsWeakHeapObject());
+  CHECK(slot_value->IsWeak());
 }
 
 
@@ -4330,82 +4408,6 @@ TEST(PolymorphicStaysPolymorphicAfterGC) {
   CheckIC(loadIC, 0, POLYMORPHIC);
 }
 
-
-TEST(WeakCell) {
-  ManualGCScope manual_gc_scope;
-  CcTest::InitializeVM();
-  Isolate* isolate = CcTest::i_isolate();
-  v8::internal::Factory* factory = isolate->factory();
-
-  HandleScope outer_scope(isolate);
-  Handle<WeakCell> weak_cell1;
-  {
-    HandleScope inner_scope(isolate);
-    Handle<HeapObject> value = factory->NewFixedArray(1, NOT_TENURED);
-    weak_cell1 = inner_scope.CloseAndEscape(factory->NewWeakCell(value));
-  }
-
-  Handle<FixedArray> survivor = factory->NewFixedArray(1, NOT_TENURED);
-  Handle<WeakCell> weak_cell2;
-  {
-    HandleScope inner_scope(isolate);
-    weak_cell2 = inner_scope.CloseAndEscape(factory->NewWeakCell(survivor));
-  }
-  CHECK(weak_cell1->value()->IsFixedArray());
-  CHECK_EQ(*survivor, weak_cell2->value());
-  CcTest::CollectGarbage(NEW_SPACE);
-  CHECK(weak_cell1->value()->IsFixedArray());
-  CHECK_EQ(*survivor, weak_cell2->value());
-  CcTest::CollectGarbage(NEW_SPACE);
-  CHECK(weak_cell1->value()->IsFixedArray());
-  CHECK_EQ(*survivor, weak_cell2->value());
-  CcTest::CollectAllAvailableGarbage();
-  CHECK(weak_cell1->cleared());
-  CHECK_EQ(*survivor, weak_cell2->value());
-}
-
-
-TEST(WeakCellsWithIncrementalMarking) {
-  if (!FLAG_incremental_marking) return;
-  ManualGCScope manual_gc_scope;
-  CcTest::InitializeVM();
-  Isolate* isolate = CcTest::i_isolate();
-  v8::internal::Heap* heap = CcTest::heap();
-  v8::internal::Factory* factory = isolate->factory();
-
-  const int N = 16;
-  HandleScope outer_scope(isolate);
-  Handle<FixedArray> survivor = factory->NewFixedArray(1, NOT_TENURED);
-  Handle<WeakCell> weak_cells[N];
-
-  for (int i = 0; i < N; i++) {
-    HandleScope inner_scope(isolate);
-    Handle<HeapObject> value =
-        i == 0 ? survivor : factory->NewFixedArray(1, NOT_TENURED);
-    Handle<WeakCell> weak_cell = factory->NewWeakCell(value);
-    CHECK(weak_cell->value()->IsFixedArray());
-    IncrementalMarking* marking = heap->incremental_marking();
-    if (marking->IsStopped()) {
-      heap->StartIncrementalMarking(i::Heap::kNoGCFlags,
-                                    i::GarbageCollectionReason::kTesting);
-    }
-    marking->Step(128, IncrementalMarking::NO_GC_VIA_STACK_GUARD,
-                  StepOrigin::kV8);
-    CcTest::CollectGarbage(NEW_SPACE);
-    CHECK(weak_cell->value()->IsFixedArray());
-    weak_cells[i] = inner_scope.CloseAndEscape(weak_cell);
-  }
-  // Call collect all twice to make sure that we also cleared
-  // weak cells that were allocated on black pages.
-  CcTest::CollectAllGarbage();
-  CcTest::CollectAllGarbage();
-  CHECK_EQ(*survivor, weak_cells[0]->value());
-  for (int i = 1; i < N; i++) {
-    CHECK(weak_cells[i]->cleared());
-  }
-}
-
-
 #ifdef DEBUG
 TEST(AddInstructionChangesNewSpacePromotion) {
   FLAG_allow_natives_syntax = true;
@@ -4462,7 +4464,7 @@ TEST(CEntryStubOOM) {
   CcTest::isolate()->SetFatalErrorHandler(OnFatalErrorExpectOOM);
 
   v8::Local<v8::Value> result = CompileRun(
-      "%SetFlags('--gc-interval=1');"
+      "%SetAllocationTimeout(1, 1);"
       "var a = [];"
       "a.__proto__ = [];"
       "a.unshift(1)");
@@ -4694,15 +4696,15 @@ TEST(Regress3877) {
   Factory* factory = isolate->factory();
   HandleScope scope(isolate);
   CompileRun("function cls() { this.x = 10; }");
-  Handle<WeakCell> weak_prototype;
+  Handle<WeakFixedArray> weak_prototype_holder = factory->NewWeakFixedArray(1);
   {
     HandleScope inner_scope(isolate);
     v8::Local<v8::Value> result = CompileRun("cls.prototype");
     Handle<JSReceiver> proto =
         v8::Utils::OpenHandle(*v8::Local<v8::Object>::Cast(result));
-    weak_prototype = inner_scope.CloseAndEscape(factory->NewWeakCell(proto));
+    weak_prototype_holder->Set(0, HeapObjectReference::Weak(*proto));
   }
-  CHECK(!weak_prototype->cleared());
+  CHECK(!weak_prototype_holder->Get(0)->IsCleared());
   CompileRun(
       "var a = { };"
       "a.x = new cls();"
@@ -4711,13 +4713,13 @@ TEST(Regress3877) {
     CcTest::CollectAllGarbage();
   }
   // The map of a.x keeps prototype alive
-  CHECK(!weak_prototype->cleared());
+  CHECK(!weak_prototype_holder->Get(0)->IsCleared());
   // Change the map of a.x and make the previous map garbage collectable.
   CompileRun("a.x.__proto__ = {};");
   for (int i = 0; i < 4; i++) {
     CcTest::CollectAllGarbage();
   }
-  CHECK(weak_prototype->cleared());
+  CHECK(weak_prototype_holder->Get(0)->IsCleared());
 }
 
 Handle<WeakFixedArray> AddRetainedMap(Isolate* isolate, Heap* heap) {
@@ -4740,15 +4742,15 @@ void CheckMapRetainingFor(int n) {
   Isolate* isolate = CcTest::i_isolate();
   Heap* heap = isolate->heap();
   Handle<WeakFixedArray> array_with_map = AddRetainedMap(isolate, heap);
-  CHECK(array_with_map->Get(0)->IsWeakHeapObject());
+  CHECK(array_with_map->Get(0)->IsWeak());
   for (int i = 0; i < n; i++) {
     heap::SimulateIncrementalMarking(heap);
     CcTest::CollectGarbage(OLD_SPACE);
   }
-  CHECK(array_with_map->Get(0)->IsWeakHeapObject());
+  CHECK(array_with_map->Get(0)->IsWeak());
   heap::SimulateIncrementalMarking(heap);
   CcTest::CollectGarbage(OLD_SPACE);
-  CHECK(array_with_map->Get(0)->IsClearedWeakHeapObject());
+  CHECK(array_with_map->Get(0)->IsCleared());
 }
 
 
@@ -4772,20 +4774,6 @@ TEST(WritableVsImmortalRoots) {
     CHECK(!immortal || !writable);
   }
 }
-
-TEST(FixedArrayOfWeakCells) {
-  CcTest::InitializeVM();
-  v8::HandleScope scope(CcTest::isolate());
-  Isolate* isolate = CcTest::i_isolate();
-
-  Handle<HeapNumber> number = isolate->factory()->NewHeapNumber(1);
-  Handle<FixedArrayOfWeakCells> array =
-      FixedArrayOfWeakCells::Add(isolate, Handle<Object>(), number);
-  array->Remove(number);
-  array->Compact<FixedArrayOfWeakCells::NullCallback>(isolate);
-  FixedArrayOfWeakCells::Add(isolate, array, number);
-}
-
 
 TEST(PreprocessStackTrace) {
   // Do not automatically trigger early GC.
@@ -5439,11 +5427,11 @@ class StaticOneByteResource : public v8::String::ExternalOneByteStringResource {
  public:
   explicit StaticOneByteResource(const char* data) : data_(data) {}
 
-  ~StaticOneByteResource() {}
+  ~StaticOneByteResource() override = default;
 
-  const char* data() const { return data_; }
+  const char* data() const override { return data_; }
 
-  size_t length() const { return strlen(data_); }
+  size_t length() const override { return strlen(data_); }
 
  private:
   const char* data_;
@@ -5493,7 +5481,8 @@ TEST(Regress631969) {
     s3->MakeExternal(&external_string);
     CcTest::CollectGarbage(OLD_SPACE);
     // This avoids the GC from trying to free stack allocated resources.
-    i::Handle<i::ExternalOneByteString>::cast(s3)->set_resource(nullptr);
+    i::Handle<i::ExternalOneByteString>::cast(s3)->SetResource(isolate,
+                                                               nullptr);
   }
 }
 
@@ -5673,7 +5662,7 @@ TEST(Regress618958) {
   v8::HandleScope scope(CcTest::isolate());
   Heap* heap = CcTest::heap();
   bool isolate_is_locked = true;
-  heap->update_external_memory(100 * MB);
+  CcTest::isolate()->AdjustAmountOfExternalAllocatedMemory(100 * MB);
   int mark_sweep_count_before = heap->ms_count();
   heap->MemoryPressureNotification(MemoryPressureLevel::kCritical,
                                    isolate_is_locked);

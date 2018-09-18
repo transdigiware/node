@@ -6,12 +6,13 @@
 
 #include <memory>
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/execution.h"
 #include "src/isolate-inl.h"
 #include "src/keys.h"
 #include "src/objects/frame-array-inl.h"
-#include "src/string-builder.h"
+#include "src/objects/js-array-inl.h"
+#include "src/string-builder-inl.h"
 #include "src/wasm/wasm-code-manager.h"
 #include "src/wasm/wasm-objects.h"
 
@@ -385,6 +386,13 @@ Handle<Object> JSStackFrame::GetMethodName() {
   }
 
   Handle<String> name(function_->shared()->Name(), isolate_);
+
+  // The static initializer function is not a method, so don't add a
+  // class name, just return the function name.
+  if (name->IsUtf8EqualTo(CStrVector("<static_fields_initializer>"), true)) {
+    return name;
+  }
+
   // ES2015 gives getters and setters name prefixes which must
   // be stripped to find the property name.
   if (name->IsUtf8EqualTo(CStrVector("get "), true) ||
@@ -649,8 +657,8 @@ void WasmStackFrame::FromFrameArray(Isolate* isolate, Handle<FrameArray> array,
   if (array->IsWasmInterpretedFrame(frame_ix)) {
     code_ = nullptr;
   } else {
-    code_ = wasm_instance_->module_object()->native_module()->code(
-        wasm_func_index_);
+    code_ = reinterpret_cast<wasm::WasmCode*>(
+        array->WasmCodeObject(frame_ix)->foreign_address());
   }
   offset_ = array->Offset(frame_ix)->value();
 }
@@ -850,8 +858,9 @@ MaybeHandle<Object> ConstructCallSite(Isolate* isolate,
       handle(isolate->native_context()->callsite_function(), isolate);
 
   Handle<JSObject> obj;
-  ASSIGN_RETURN_ON_EXCEPTION(isolate, obj, JSObject::New(target, target),
-                             Object);
+  ASSIGN_RETURN_ON_EXCEPTION(
+      isolate, obj,
+      JSObject::New(target, target, Handle<AllocationSite>::null()), Object);
 
   Handle<Symbol> key = isolate->factory()->call_site_frame_array_symbol();
   RETURN_ON_EXCEPTION(isolate, JSObject::SetOwnPropertyIgnoreAttributes(
@@ -946,39 +955,55 @@ MaybeHandle<Object> ErrorUtils::FormatStackTrace(Isolate* isolate,
   Handle<FrameArray> elems(FrameArray::cast(raw_stack_array->elements()),
                            isolate);
 
-  // If there's a user-specified "prepareStackFrames" function, call it on the
-  // frames and use its result.
-
-  Handle<JSFunction> global_error = isolate->error_function();
-  Handle<Object> prepare_stack_trace;
-  ASSIGN_RETURN_ON_EXCEPTION(
-      isolate, prepare_stack_trace,
-      JSFunction::GetProperty(isolate, global_error, "prepareStackTrace"),
-      Object);
-
   const bool in_recursion = isolate->formatting_stack_trace();
-  if (prepare_stack_trace->IsJSFunction() && !in_recursion) {
-    PrepareStackTraceScope scope(isolate);
+  if (!in_recursion) {
+    if (isolate->HasPrepareStackTraceCallback()) {
+      Handle<Context> error_context = error->GetCreationContext();
+      DCHECK(!error_context.is_null() && error_context->IsNativeContext());
+      PrepareStackTraceScope scope(isolate);
 
-    isolate->CountUsage(v8::Isolate::kErrorPrepareStackTrace);
+      Handle<Object> result;
+      ASSIGN_RETURN_ON_EXCEPTION(
+          isolate, result,
+          isolate->RunPrepareStackTraceCallback(error_context, error), Object);
+      return result;
+    } else {
+      Handle<JSFunction> global_error = isolate->error_function();
 
-    Handle<JSArray> sites;
-    ASSIGN_RETURN_ON_EXCEPTION(isolate, sites, GetStackFrames(isolate, elems),
-                               Object);
+      // If there's a user-specified "prepareStackTrace" function, call it on
+      // the frames and use its result.
 
-    const int argc = 2;
-    ScopedVector<Handle<Object>> argv(argc);
+      Handle<Object> prepare_stack_trace;
+      ASSIGN_RETURN_ON_EXCEPTION(
+          isolate, prepare_stack_trace,
+          JSFunction::GetProperty(isolate, global_error, "prepareStackTrace"),
+          Object);
 
-    argv[0] = error;
-    argv[1] = sites;
+      if (prepare_stack_trace->IsJSFunction()) {
+        PrepareStackTraceScope scope(isolate);
 
-    Handle<Object> result;
-    ASSIGN_RETURN_ON_EXCEPTION(
-        isolate, result, Execution::Call(isolate, prepare_stack_trace,
-                                         global_error, argc, argv.start()),
-        Object);
+        isolate->CountUsage(v8::Isolate::kErrorPrepareStackTrace);
 
-    return result;
+        Handle<JSArray> sites;
+        ASSIGN_RETURN_ON_EXCEPTION(isolate, sites,
+                                   GetStackFrames(isolate, elems), Object);
+
+        const int argc = 2;
+        ScopedVector<Handle<Object>> argv(argc);
+        argv[0] = error;
+        argv[1] = sites;
+
+        Handle<Object> result;
+
+        ASSIGN_RETURN_ON_EXCEPTION(
+            isolate, result,
+            Execution::Call(isolate, prepare_stack_trace, global_error, argc,
+                            argv.start()),
+            Object);
+
+        return result;
+      }
+    }
   }
 
   // Otherwise, run our internal formatting logic.
@@ -1029,7 +1054,7 @@ Handle<String> MessageTemplate::FormatMessage(Isolate* isolate,
   Factory* factory = isolate->factory();
   Handle<String> result_string = Object::NoSideEffectsToString(isolate, arg);
   MaybeHandle<String> maybe_result_string = MessageTemplate::FormatMessage(
-      template_index, result_string, factory->empty_string(),
+      isolate, template_index, result_string, factory->empty_string(),
       factory->empty_string());
   if (!maybe_result_string.ToHandle(&result_string)) {
     DCHECK(isolate->has_pending_exception());
@@ -1058,12 +1083,11 @@ const char* MessageTemplate::TemplateString(int template_index) {
   }
 }
 
-
-MaybeHandle<String> MessageTemplate::FormatMessage(int template_index,
+MaybeHandle<String> MessageTemplate::FormatMessage(Isolate* isolate,
+                                                   int template_index,
                                                    Handle<String> arg0,
                                                    Handle<String> arg1,
                                                    Handle<String> arg2) {
-  Isolate* isolate = arg0->GetIsolate();
   const char* template_string = TemplateString(template_index);
   if (template_string == nullptr) {
     isolate->ThrowIllegalOperation();
@@ -1107,8 +1131,10 @@ MaybeHandle<Object> ErrorUtils::Construct(
   // 2. Let O be ? OrdinaryCreateFromConstructor(newTarget, "%ErrorPrototype%",
   //    « [[ErrorData]] »).
   Handle<JSObject> err;
-  ASSIGN_RETURN_ON_EXCEPTION(isolate, err,
-                             JSObject::New(target, new_target_recv), Object);
+  ASSIGN_RETURN_ON_EXCEPTION(
+      isolate, err,
+      JSObject::New(target, new_target_recv, Handle<AllocationSite>::null()),
+      Object);
 
   // 3. If message is not undefined, then
   //  a. Let msg be ? ToString(message).
@@ -1228,8 +1254,8 @@ Handle<String> FormatMessage(Isolate* isolate, int template_index,
   isolate->native_context()->IncrementErrorsThrown();
 
   Handle<String> msg;
-  if (!MessageTemplate::FormatMessage(template_index, arg0_str, arg1_str,
-                                      arg2_str)
+  if (!MessageTemplate::FormatMessage(isolate, template_index, arg0_str,
+                                      arg1_str, arg2_str)
            .ToHandle(&msg)) {
     DCHECK(isolate->has_pending_exception());
     isolate->clear_pending_exception();

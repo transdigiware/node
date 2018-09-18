@@ -27,7 +27,7 @@ class StringsStorage;
 class HeapProfiler : public HeapObjectAllocationTracker {
  public:
   explicit HeapProfiler(Heap* heap);
-  ~HeapProfiler();
+  ~HeapProfiler() override;
 
   HeapSnapshot* TakeSnapshot(
       v8::ActivityControl* control,
@@ -85,7 +85,7 @@ class HeapProfiler : public HeapObjectAllocationTracker {
   Handle<HeapObject> FindHeapObjectById(SnapshotObjectId id);
   void ClearHeapObjectMap();
 
-  Isolate* isolate() const { return heap()->isolate(); }
+  Isolate* isolate() const;
 
   void QueryObjects(Handle<Context> context,
                     debug::QueryObjectPredicate* predicate,

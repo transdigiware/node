@@ -7,6 +7,7 @@
 
 #include "src/heap/incremental-marking.h"
 #include "src/isolate.h"
+#include "src/objects-inl.h"
 #include "src/objects/maybe-object.h"
 
 namespace v8 {
@@ -29,24 +30,9 @@ void IncrementalMarking::RecordMaybeWeakWrite(HeapObject* obj,
   // When writing a weak reference, treat it as strong for the purposes of the
   // marking barrier.
   HeapObject* heap_object;
-  if (IsMarking() && value->ToStrongOrWeakHeapObject(&heap_object)) {
+  if (IsMarking() && value->GetHeapObject(&heap_object)) {
     RecordWriteSlow(obj, reinterpret_cast<HeapObjectReference**>(slot),
                     heap_object);
-  }
-}
-
-void IncrementalMarking::RecordWrites(HeapObject* obj) {
-  if (IsMarking()) {
-    if (FLAG_concurrent_marking || marking_state()->IsBlack(obj)) {
-      RevisitObject(obj);
-    }
-  }
-}
-
-void IncrementalMarking::RecordWriteIntoCode(Code* host, RelocInfo* rinfo,
-                                             Object* value) {
-  if (IsMarking() && value->IsHeapObject()) {
-    RecordWriteIntoCodeSlow(host, rinfo, value);
   }
 }
 

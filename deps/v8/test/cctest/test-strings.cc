@@ -34,7 +34,7 @@
 
 #include "src/v8.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/heap/factory.h"
 #include "src/messages.h"
 #include "src/objects-inl.h"
@@ -105,9 +105,9 @@ static const int SUPER_DEEP_DEPTH = 80 * 1024;
 class Resource: public v8::String::ExternalStringResource {
  public:
   Resource(const uc16* data, size_t length): data_(data), length_(length) {}
-  ~Resource() { i::DeleteArray(data_); }
-  virtual const uint16_t* data() const { return data_; }
-  virtual size_t length() const { return length_; }
+  ~Resource() override { i::DeleteArray(data_); }
+  const uint16_t* data() const override { return data_; }
+  size_t length() const override { return length_; }
 
  private:
   const uc16* data_;
@@ -119,9 +119,9 @@ class OneByteResource : public v8::String::ExternalOneByteStringResource {
  public:
   OneByteResource(const char* data, size_t length)
       : data_(data), length_(length) {}
-  ~OneByteResource() { i::DeleteArray(data_); }
-  virtual const char* data() const { return data_; }
-  virtual size_t length() const { return length_; }
+  ~OneByteResource() override { i::DeleteArray(data_); }
+  const char* data() const override { return data_; }
+  size_t length() const override { return length_; }
 
  private:
   const char* data_;
@@ -951,7 +951,8 @@ TEST(Utf8Conversion) {
     for (int j = 0; j < 11; j++)
       buffer[j] = kNoChar;
     int chars_written;
-    int written = mixed->WriteUtf8(buffer, i, &chars_written);
+    int written =
+        mixed->WriteUtf8(CcTest::isolate(), buffer, i, &chars_written);
     CHECK_EQ(lengths[i], written);
     CHECK_EQ(char_lengths[i], chars_written);
     // Check that the contents are correct
@@ -1095,7 +1096,7 @@ TEST(JSONStringifySliceMadeExternal) {
 
   int length = underlying->Length();
   uc16* two_byte = NewArray<uc16>(length + 1);
-  underlying->Write(two_byte);
+  underlying->Write(CcTest::isolate(), two_byte);
   Resource* resource = new Resource(two_byte, length);
   CHECK(underlying->MakeExternal(resource));
   CHECK(v8::Utils::OpenHandle(*slice)->IsSlicedString());
@@ -1185,9 +1186,9 @@ class OneByteVectorResource : public v8::String::ExternalOneByteStringResource {
  public:
   explicit OneByteVectorResource(i::Vector<const char> vector)
       : data_(vector) {}
-  virtual ~OneByteVectorResource() {}
-  virtual size_t length() const { return data_.length(); }
-  virtual const char* data() const { return data_.start(); }
+  ~OneByteVectorResource() override = default;
+  size_t length() const override { return data_.length(); }
+  const char* data() const override { return data_.start(); }
  private:
   i::Vector<const char> data_;
 };
@@ -1245,7 +1246,8 @@ TEST(SliceFromExternal) {
   CHECK(SlicedString::cast(*slice)->parent()->IsExternalString());
   CHECK(slice->IsFlat());
   // This avoids the GC from trying to free stack allocated resources.
-  i::Handle<i::ExternalOneByteString>::cast(string)->set_resource(nullptr);
+  i::Handle<i::ExternalOneByteString>::cast(string)->SetResource(
+      CcTest::i_isolate(), nullptr);
 }
 
 
@@ -1462,15 +1464,15 @@ TEST(Latin1IgnoreCase) {
 
 class DummyResource: public v8::String::ExternalStringResource {
  public:
-  virtual const uint16_t* data() const { return nullptr; }
-  virtual size_t length() const { return 1 << 30; }
+  const uint16_t* data() const override { return nullptr; }
+  size_t length() const override { return 1 << 30; }
 };
 
 
 class DummyOneByteResource: public v8::String::ExternalOneByteStringResource {
  public:
-  virtual const char* data() const { return nullptr; }
-  virtual size_t length() const { return 1 << 30; }
+  const char* data() const override { return nullptr; }
+  size_t length() const override { return 1 << 30; }
 };
 
 
@@ -1526,8 +1528,9 @@ TEST(FormatMessage) {
   Handle<String> arg1 = isolate->factory()->NewStringFromAsciiChecked("arg1");
   Handle<String> arg2 = isolate->factory()->NewStringFromAsciiChecked("arg2");
   Handle<String> result =
-      MessageTemplate::FormatMessage(MessageTemplate::kPropertyNotFunction,
-                                     arg0, arg1, arg2).ToHandleChecked();
+      MessageTemplate::FormatMessage(
+          isolate, MessageTemplate::kPropertyNotFunction, arg0, arg1, arg2)
+          .ToHandleChecked();
   Handle<String> expected = isolate->factory()->NewStringFromAsciiChecked(
       "'arg0' returned for property 'arg1' of object 'arg2' is not a function");
   CHECK(String::Equals(isolate, result, expected));
@@ -1659,6 +1662,35 @@ TEST(HashArrayIndexStrings) {
   CHECK_EQ(StringHasher::MakeArrayIndexHash(1 /* value */, 1 /* length */) >>
                Name::kHashShift,
            isolate->factory()->one_string()->Hash());
+}
+
+TEST(StringEquals) {
+  v8::V8::Initialize();
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
+
+  auto foo_str =
+      v8::String::NewFromUtf8(isolate, "foo", v8::NewStringType::kNormal)
+          .ToLocalChecked();
+  auto bar_str =
+      v8::String::NewFromUtf8(isolate, "bar", v8::NewStringType::kNormal)
+          .ToLocalChecked();
+  auto foo_str2 =
+      v8::String::NewFromUtf8(isolate, "foo", v8::NewStringType::kNormal)
+          .ToLocalChecked();
+
+  uint16_t* two_byte_source = AsciiToTwoByteString("foo");
+  auto foo_two_byte_str =
+      v8::String::NewFromTwoByte(isolate, two_byte_source,
+                                 v8::NewStringType::kNormal)
+          .ToLocalChecked();
+  i::DeleteArray(two_byte_source);
+
+  CHECK(foo_str->StringEquals(foo_str));
+  CHECK(!foo_str->StringEquals(bar_str));
+  CHECK(foo_str->StringEquals(foo_str2));
+  CHECK(foo_str->StringEquals(foo_two_byte_str));
+  CHECK(!bar_str->StringEquals(foo_str2));
 }
 
 }  // namespace test_strings

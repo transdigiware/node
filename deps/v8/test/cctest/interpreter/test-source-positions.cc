@@ -4,7 +4,7 @@
 
 #include "src/v8.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/compiler/pipeline.h"
 #include "src/handles.h"
 #include "src/interpreter/bytecode-generator.h"
@@ -49,7 +49,7 @@ struct TestCaseData {
   const char* arguments() const { return arguments_; }
 
  private:
-  TestCaseData();
+  TestCaseData() = delete;
 
   const char* const script_;
   const char* const declaration_parameters_;

@@ -39,11 +39,11 @@ Node* StringBuiltinsAssembler::DirectStringData(Node* string,
   BIND(&if_external);
   {
     // This is only valid for ExternalStrings where the resource data
-    // pointer is cached (i.e. no short external strings).
-    CSA_ASSERT(
-        this, Word32NotEqual(Word32And(string_instance_type,
-                                       Int32Constant(kShortExternalStringMask)),
-                             Int32Constant(kShortExternalStringTag)));
+    // pointer is cached (i.e. no uncached external strings).
+    CSA_ASSERT(this, Word32NotEqual(
+                         Word32And(string_instance_type,
+                                   Int32Constant(kUncachedExternalStringMask)),
+                         Int32Constant(kUncachedExternalStringTag)));
     var_data.Bind(LoadObjectField(string, ExternalString::kResourceDataOffset,
                                   MachineType::Pointer()));
     Goto(&if_join);
@@ -191,11 +191,11 @@ void StringBuiltinsAssembler::StringEqual_Core(
 
   // Check if both {lhs} and {rhs} are direct strings, and that in case of
   // ExternalStrings the data pointer is cached.
-  STATIC_ASSERT(kShortExternalStringTag != 0);
+  STATIC_ASSERT(kUncachedExternalStringTag != 0);
   STATIC_ASSERT(kIsIndirectStringTag != 0);
   int const kBothDirectStringMask =
-      kIsIndirectStringMask | kShortExternalStringMask |
-      ((kIsIndirectStringMask | kShortExternalStringMask) << 8);
+      kIsIndirectStringMask | kUncachedExternalStringMask |
+      ((kIsIndirectStringMask | kUncachedExternalStringMask) << 8);
   GotoIfNot(Word32Equal(Word32And(both_instance_types,
                                   Int32Constant(kBothDirectStringMask)),
                         Int32Constant(0)),
@@ -284,67 +284,31 @@ void StringBuiltinsAssembler::StringEqual_Loop(
   }
 }
 
-void StringBuiltinsAssembler::Generate_StringAdd(StringAddFlags flags,
-                                                 PretenureFlag pretenure_flag,
-                                                 Node* context, Node* left,
-                                                 Node* right) {
-  switch (flags) {
-    case STRING_ADD_CONVERT_LEFT: {
-      // TODO(danno): The ToString and JSReceiverToPrimitive below could be
-      // combined to avoid duplicate smi and instance type checks.
-      left = ToString(context, JSReceiverToPrimitive(context, left));
-      Callable callable = CodeFactory::StringAdd(
-          isolate(), STRING_ADD_CHECK_NONE, pretenure_flag);
-      TailCallStub(callable, context, left, right);
-      break;
-    }
-    case STRING_ADD_CONVERT_RIGHT: {
-      // TODO(danno): The ToString and JSReceiverToPrimitive below could be
-      // combined to avoid duplicate smi and instance type checks.
-      right = ToString(context, JSReceiverToPrimitive(context, right));
-      Callable callable = CodeFactory::StringAdd(
-          isolate(), STRING_ADD_CHECK_NONE, pretenure_flag);
-      TailCallStub(callable, context, left, right);
-      break;
-    }
-    case STRING_ADD_CHECK_NONE: {
-      CodeStubAssembler::AllocationFlag allocation_flags =
-          (pretenure_flag == TENURED) ? CodeStubAssembler::kPretenured
-                                      : CodeStubAssembler::kNone;
-      Return(StringAdd(context, CAST(left), CAST(right), allocation_flags));
-      break;
-    }
-  }
+TF_BUILTIN(StringAdd_CheckNone, StringBuiltinsAssembler) {
+  TNode<String> left = CAST(Parameter(Descriptor::kLeft));
+  TNode<String> right = CAST(Parameter(Descriptor::kRight));
+  Node* context = Parameter(Descriptor::kContext);
+  Return(StringAdd(context, left, right));
 }
 
-TF_BUILTIN(StringAdd_CheckNone_NotTenured, StringBuiltinsAssembler) {
-  Node* left = Parameter(Descriptor::kLeft);
-  Node* right = Parameter(Descriptor::kRight);
+TF_BUILTIN(StringAdd_ConvertLeft, StringBuiltinsAssembler) {
+  TNode<Object> left = CAST(Parameter(Descriptor::kLeft));
+  TNode<String> right = CAST(Parameter(Descriptor::kRight));
   Node* context = Parameter(Descriptor::kContext);
-  Generate_StringAdd(STRING_ADD_CHECK_NONE, NOT_TENURED, context, left, right);
+  // TODO(danno): The ToString and JSReceiverToPrimitive below could be
+  // combined to avoid duplicate smi and instance type checks.
+  left = ToString(context, JSReceiverToPrimitive(context, left));
+  TailCallBuiltin(Builtins::kStringAdd_CheckNone, context, left, right);
 }
 
-TF_BUILTIN(StringAdd_CheckNone_Tenured, StringBuiltinsAssembler) {
-  Node* left = Parameter(Descriptor::kLeft);
-  Node* right = Parameter(Descriptor::kRight);
+TF_BUILTIN(StringAdd_ConvertRight, StringBuiltinsAssembler) {
+  TNode<String> left = CAST(Parameter(Descriptor::kLeft));
+  TNode<Object> right = CAST(Parameter(Descriptor::kRight));
   Node* context = Parameter(Descriptor::kContext);
-  Generate_StringAdd(STRING_ADD_CHECK_NONE, TENURED, context, left, right);
-}
-
-TF_BUILTIN(StringAdd_ConvertLeft_NotTenured, StringBuiltinsAssembler) {
-  Node* left = Parameter(Descriptor::kLeft);
-  Node* right = Parameter(Descriptor::kRight);
-  Node* context = Parameter(Descriptor::kContext);
-  Generate_StringAdd(STRING_ADD_CONVERT_LEFT, NOT_TENURED, context, left,
-                     right);
-}
-
-TF_BUILTIN(StringAdd_ConvertRight_NotTenured, StringBuiltinsAssembler) {
-  Node* left = Parameter(Descriptor::kLeft);
-  Node* right = Parameter(Descriptor::kRight);
-  Node* context = Parameter(Descriptor::kContext);
-  Generate_StringAdd(STRING_ADD_CONVERT_RIGHT, NOT_TENURED, context, left,
-                     right);
+  // TODO(danno): The ToString and JSReceiverToPrimitive below could be
+  // combined to avoid duplicate smi and instance type checks.
+  right = ToString(context, JSReceiverToPrimitive(context, right));
+  TailCallBuiltin(Builtins::kStringAdd_CheckNone, context, left, right);
 }
 
 TF_BUILTIN(SubString, StringBuiltinsAssembler) {
@@ -354,12 +318,10 @@ TF_BUILTIN(SubString, StringBuiltinsAssembler) {
   Return(SubString(string, SmiUntag(from), SmiUntag(to)));
 }
 
-void StringBuiltinsAssembler::GenerateStringAt(char const* method_name,
-                                               TNode<Context> context,
-                                               Node* receiver,
-                                               TNode<Object> maybe_position,
-                                               TNode<Object> default_return,
-                                               StringAtAccessor accessor) {
+void StringBuiltinsAssembler::GenerateStringAt(
+    char const* method_name, TNode<Context> context, Node* receiver,
+    TNode<Object> maybe_position, TNode<Object> default_return,
+    const StringAtAccessor& accessor) {
   // Check that {receiver} is coercible to Object and convert it to a String.
   TNode<String> string = ToThisString(context, receiver, method_name);
 
@@ -587,8 +549,9 @@ TF_BUILTIN(StringGreaterThanOrEqual, StringBuiltinsAssembler) {
 }
 
 TF_BUILTIN(StringCharAt, StringBuiltinsAssembler) {
-  Node* receiver = Parameter(Descriptor::kReceiver);
-  Node* position = Parameter(Descriptor::kPosition);
+  TNode<String> receiver = CAST(Parameter(Descriptor::kReceiver));
+  TNode<IntPtrT> position =
+      UncheckedCast<IntPtrT>(Parameter(Descriptor::kPosition));
 
   // Load the character code at the {position} from the {receiver}.
   TNode<Int32T> code = StringCharCodeAt(receiver, position);
@@ -639,7 +602,6 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
   Node* context = Parameter(Descriptor::kContext);
 
   CodeStubArguments arguments(this, ChangeInt32ToIntPtr(argc));
-  TNode<Smi> smi_argc = SmiTag(arguments.GetLength(INTPTR_PARAMETERS));
   // Check if we have exactly one argument (plus the implicit receiver), i.e.
   // if the parent frame is not an arguments adaptor frame.
   Label if_oneargument(this), if_notoneargument(this);
@@ -664,7 +626,7 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
   {
     Label two_byte(this);
     // Assume that the resulting string contains only one-byte characters.
-    Node* one_byte_result = AllocateSeqOneByteString(context, smi_argc);
+    Node* one_byte_result = AllocateSeqOneByteString(context, Unsigned(argc));
 
     TVARIABLE(IntPtrT, var_max_index);
     var_max_index = IntPtrConstant(0);
@@ -698,7 +660,7 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
     // At least one of the characters in the string requires a 16-bit
     // representation.  Allocate a SeqTwoByteString to hold the resulting
     // string.
-    Node* two_byte_result = AllocateSeqTwoByteString(context, smi_argc);
+    Node* two_byte_result = AllocateSeqTwoByteString(context, Unsigned(argc));
 
     // Copy the characters that have already been put in the 8-bit string into
     // their corresponding positions in the new 16-bit string.
@@ -817,7 +779,7 @@ TF_BUILTIN(StringPrototypeConcat, CodeStubAssembler) {
 
 void StringBuiltinsAssembler::StringIndexOf(
     Node* const subject_string, Node* const search_string, Node* const position,
-    std::function<void(Node*)> f_return) {
+    const std::function<void(Node*)>& f_return) {
   CSA_ASSERT(this, IsString(subject_string));
   CSA_ASSERT(this, IsString(search_string));
   CSA_ASSERT(this, TaggedIsSmi(position));
@@ -1229,8 +1191,6 @@ TF_BUILTIN(StringPrototypeRepeat, StringBuiltinsAssembler) {
   TNode<Object> count = CAST(Parameter(Descriptor::kCount));
   Node* const string =
       ToThisString(context, receiver, "String.prototype.repeat");
-  Node* const is_stringempty =
-      SmiEqual(LoadStringLengthAsSmi(string), SmiConstant(0));
 
   VARIABLE(
       var_count, MachineRepresentation::kTagged,
@@ -1248,7 +1208,8 @@ TF_BUILTIN(StringPrototypeRepeat, StringBuiltinsAssembler) {
       TNode<Smi> smi_count = CAST(var_count.value());
       GotoIf(SmiLessThan(smi_count, SmiConstant(0)), &invalid_count);
       GotoIf(SmiEqual(smi_count, SmiConstant(0)), &return_emptystring);
-      GotoIf(is_stringempty, &return_emptystring);
+      GotoIf(Word32Equal(LoadStringLengthAsWord32(string), Int32Constant(0)),
+             &return_emptystring);
       GotoIf(SmiGreaterThan(smi_count, SmiConstant(String::kMaxLength)),
              &invalid_string_length);
       Return(CallBuiltin(Builtins::kStringRepeat, context, string, smi_count));
@@ -1266,7 +1227,8 @@ TF_BUILTIN(StringPrototypeRepeat, StringBuiltinsAssembler) {
              &invalid_count);
       GotoIf(Float64LessThan(number_value, Float64Constant(0.0)),
              &invalid_count);
-      Branch(is_stringempty, &return_emptystring, &invalid_string_length);
+      Branch(Word32Equal(LoadStringLengthAsWord32(string), Int32Constant(0)),
+             &return_emptystring, &invalid_string_length);
     }
   }
 
@@ -1311,9 +1273,6 @@ TF_BUILTIN(StringRepeat, StringBuiltinsAssembler) {
   VARIABLE(var_temp, MachineRepresentation::kTagged, string);
   TVARIABLE(Smi, var_count, count);
 
-  Callable stringadd_callable =
-      CodeFactory::StringAdd(isolate(), STRING_ADD_CHECK_NONE, NOT_TENURED);
-
   Label loop(this, {&var_count, &var_result, &var_temp}), return_result(this);
   Goto(&loop);
   BIND(&loop);
@@ -1321,16 +1280,16 @@ TF_BUILTIN(StringRepeat, StringBuiltinsAssembler) {
     {
       Label next(this);
       GotoIfNot(SmiToInt32(SmiAnd(var_count.value(), SmiConstant(1))), &next);
-      var_result.Bind(CallStub(stringadd_callable, context, var_result.value(),
-                               var_temp.value()));
+      var_result.Bind(CallBuiltin(Builtins::kStringAdd_CheckNone, context,
+                                  var_result.value(), var_temp.value()));
       Goto(&next);
       BIND(&next);
     }
 
     var_count = SmiShr(var_count.value(), 1);
     GotoIf(SmiEqual(var_count.value(), SmiConstant(0)), &return_result);
-    var_temp.Bind(CallStub(stringadd_callable, context, var_temp.value(),
-                           var_temp.value()));
+    var_temp.Bind(CallBuiltin(Builtins::kStringAdd_CheckNone, context,
+                              var_temp.value(), var_temp.value()));
     Goto(&loop);
   }
 
@@ -1369,16 +1328,16 @@ TF_BUILTIN(StringPrototypeReplace, StringBuiltinsAssembler) {
   TNode<String> const subject_string = ToString_Inline(context, receiver);
   TNode<String> const search_string = ToString_Inline(context, search);
 
-  TNode<Smi> const subject_length = LoadStringLengthAsSmi(subject_string);
-  TNode<Smi> const search_length = LoadStringLengthAsSmi(search_string);
+  TNode<IntPtrT> const subject_length = LoadStringLengthAsWord(subject_string);
+  TNode<IntPtrT> const search_length = LoadStringLengthAsWord(search_string);
 
   // Fast-path single-char {search}, long cons {receiver}, and simple string
   // {replace}.
   {
     Label next(this);
 
-    GotoIfNot(SmiEqual(search_length, SmiConstant(1)), &next);
-    GotoIfNot(SmiGreaterThan(subject_length, SmiConstant(0xFF)), &next);
+    GotoIfNot(WordEqual(search_length, IntPtrConstant(1)), &next);
+    GotoIfNot(IntPtrGreaterThan(subject_length, IntPtrConstant(0xFF)), &next);
     GotoIf(TaggedIsSmi(replace), &next);
     GotoIfNot(IsString(replace), &next);
 
@@ -1430,10 +1389,8 @@ TF_BUILTIN(StringPrototypeReplace, StringBuiltinsAssembler) {
     BIND(&next);
   }
 
-  TNode<Smi> const match_end_index = SmiAdd(match_start_index, search_length);
-
-  Callable stringadd_callable =
-      CodeFactory::StringAdd(isolate(), STRING_ADD_CHECK_NONE, NOT_TENURED);
+  TNode<Smi> const match_end_index =
+      SmiAdd(match_start_index, SmiFromIntPtr(search_length));
 
   VARIABLE(var_result, MachineRepresentation::kTagged, EmptyStringConstant());
 
@@ -1465,8 +1422,8 @@ TF_BUILTIN(StringPrototypeReplace, StringBuiltinsAssembler) {
         CallJS(call_callable, context, replace, UndefinedConstant(),
                search_string, match_start_index, subject_string);
     Node* const replacement_string = ToString_Inline(context, replacement);
-    var_result.Bind(CallStub(stringadd_callable, context, var_result.value(),
-                             replacement_string));
+    var_result.Bind(CallBuiltin(Builtins::kStringAdd_CheckNone, context,
+                                var_result.value(), replacement_string));
     Goto(&out);
   }
 
@@ -1476,8 +1433,8 @@ TF_BUILTIN(StringPrototypeReplace, StringBuiltinsAssembler) {
     Node* const replacement =
         GetSubstitution(context, subject_string, match_start_index,
                         match_end_index, replace_string);
-    var_result.Bind(
-        CallStub(stringadd_callable, context, var_result.value(), replacement));
+    var_result.Bind(CallBuiltin(Builtins::kStringAdd_CheckNone, context,
+                                var_result.value(), replacement));
     Goto(&out);
   }
 
@@ -1485,9 +1442,9 @@ TF_BUILTIN(StringPrototypeReplace, StringBuiltinsAssembler) {
   {
     Node* const suffix =
         CallBuiltin(Builtins::kStringSubstring, context, subject_string,
-                    SmiUntag(match_end_index), SmiUntag(subject_length));
-    Node* const result =
-        CallStub(stringadd_callable, context, var_result.value(), suffix);
+                    SmiUntag(match_end_index), subject_length);
+    Node* const result = CallBuiltin(Builtins::kStringAdd_CheckNone, context,
+                                     var_result.value(), suffix);
     Return(result);
   }
 }
@@ -1640,7 +1597,8 @@ class StringPadAssembler : public StringBuiltinsAssembler {
     TVARIABLE(String, var_fill_string, StringConstant(" "));
     TVARIABLE(IntPtrT, var_fill_length, IntPtrConstant(1));
 
-    Label argc_2(this), dont_pad(this), invalid_string_length(this), pad(this);
+    Label check_fill(this), dont_pad(this), invalid_string_length(this),
+        pad(this);
 
     // If no max_length was provided, return the string.
     GotoIf(IntPtrEqual(argc, IntPtrConstant(0)), &dont_pad);
@@ -1649,41 +1607,39 @@ class StringPadAssembler : public StringBuiltinsAssembler {
         ToLength_Inline(context, arguments.AtIndex(0));
     CSA_ASSERT(this, IsNumberNormalized(max_length));
 
-    // Throw if max_length is not a smi or greater than the max string length.
-    GotoIfNot(TaggedIsSmi(max_length), &invalid_string_length);
-    TNode<Smi> smi_max_length = CAST(max_length);
-    GotoIfNot(
-        SmiLessThanOrEqual(smi_max_length, SmiConstant(String::kMaxLength)),
-        &invalid_string_length);
+    // If max_length <= string_length, return the string.
+    GotoIfNot(TaggedIsSmi(max_length), &check_fill);
+    Branch(SmiLessThanOrEqual(CAST(max_length), string_length), &dont_pad,
+           &check_fill);
 
-    // If the max_length is less than length of the string, return the string.
-    CSA_ASSERT(this, TaggedIsPositiveSmi(smi_max_length));
-    GotoIf(SmiLessThanOrEqual(smi_max_length, string_length), &dont_pad);
-
-    Branch(IntPtrEqual(argc, IntPtrConstant(1)), &pad, &argc_2);
-    BIND(&argc_2);
+    BIND(&check_fill);
     {
+      GotoIf(IntPtrEqual(argc, IntPtrConstant(1)), &pad);
       Node* const fill = arguments.AtIndex(1);
       GotoIf(IsUndefined(fill), &pad);
 
       var_fill_string = ToString_Inline(context, fill);
       var_fill_length = LoadStringLengthAsWord(var_fill_string.value());
-
-      Branch(IntPtrGreaterThan(var_fill_length.value(), IntPtrConstant(0)),
-             &pad, &dont_pad);
+      Branch(WordEqual(var_fill_length.value(), IntPtrConstant(0)), &dont_pad,
+             &pad);
     }
+
     BIND(&pad);
     {
       CSA_ASSERT(this,
                  IntPtrGreaterThan(var_fill_length.value(), IntPtrConstant(0)));
-      CSA_ASSERT(this, SmiGreaterThan(smi_max_length, string_length));
 
-      Callable stringadd_callable =
-          CodeFactory::StringAdd(isolate(), STRING_ADD_CHECK_NONE, NOT_TENURED);
+      // Throw if max_length is greater than String::kMaxLength.
+      GotoIfNot(TaggedIsSmi(max_length), &invalid_string_length);
+      TNode<Smi> smi_max_length = CAST(max_length);
+      GotoIfNot(
+          SmiLessThanOrEqual(smi_max_length, SmiConstant(String::kMaxLength)),
+          &invalid_string_length);
+
+      CSA_ASSERT(this, SmiGreaterThan(smi_max_length, string_length));
       TNode<Smi> const pad_length = SmiSub(smi_max_length, string_length);
 
       VARIABLE(var_pad, MachineRepresentation::kTagged);
-
       Label single_char_fill(this), multi_char_fill(this), return_result(this);
       Branch(IntPtrEqual(var_fill_length.value(), IntPtrConstant(1)),
              &single_char_fill, &multi_char_fill);
@@ -1716,19 +1672,20 @@ class StringPadAssembler : public StringBuiltinsAssembler {
           Node* const remainder_string = CallBuiltin(
               Builtins::kStringSubstring, context, var_fill_string.value(),
               IntPtrConstant(0), ChangeInt32ToIntPtr(remaining_word32));
-          var_pad.Bind(CallStub(stringadd_callable, context, var_pad.value(),
-                                remainder_string));
+          var_pad.Bind(CallBuiltin(Builtins::kStringAdd_CheckNone, context,
+                                   var_pad.value(), remainder_string));
           Goto(&return_result);
         }
       }
       BIND(&return_result);
       CSA_ASSERT(this,
                  SmiEqual(pad_length, LoadStringLengthAsSmi(var_pad.value())));
-      arguments.PopAndReturn(variant == kStart
-                                 ? CallStub(stringadd_callable, context,
-                                            var_pad.value(), receiver_string)
-                                 : CallStub(stringadd_callable, context,
-                                            receiver_string, var_pad.value()));
+      arguments.PopAndReturn(
+          variant == kStart
+              ? CallBuiltin(Builtins::kStringAdd_CheckNone, context,
+                            var_pad.value(), receiver_string)
+              : CallBuiltin(Builtins::kStringAdd_CheckNone, context,
+                            receiver_string, var_pad.value()));
     }
     BIND(&dont_pad);
     arguments.PopAndReturn(receiver_string);
@@ -1837,8 +1794,8 @@ TNode<JSArray> StringBuiltinsAssembler::StringToArray(
 
     ToDirectStringAssembler to_direct(state(), subject_string);
     to_direct.TryToDirect(&call_runtime);
-    TNode<FixedArray> elements = AllocateFixedArray(
-        PACKED_ELEMENTS, length, AllocationFlag::kAllowLargeObjectAllocation);
+    TNode<FixedArray> elements = CAST(AllocateFixedArray(
+        PACKED_ELEMENTS, length, AllocationFlag::kAllowLargeObjectAllocation));
     // Don't allocate anything while {string_data} is live!
     TNode<RawPtrT> string_data = UncheckedCast<RawPtrT>(
         to_direct.PointerToData(&fill_thehole_and_call_runtime));
@@ -1951,7 +1908,7 @@ TF_BUILTIN(StringPrototypeSplit, StringBuiltinsAssembler) {
     Node* const capacity = IntPtrConstant(1);
     Node* const result = AllocateJSArray(kind, array_map, capacity, length);
 
-    Node* const fixed_array = LoadElements(result);
+    TNode<FixedArray> const fixed_array = CAST(LoadElements(result));
     StoreFixedArrayElement(fixed_array, 0, subject_string);
 
     args.PopAndReturn(result);
@@ -2302,10 +2259,10 @@ void StringTrimAssembler::ScanForNonWhiteSpaceOrLineTerminator(
   BIND(&out);
 }
 
-void StringTrimAssembler::BuildLoop(Variable* const var_index, Node* const end,
-                                    int increment, Label* const if_none_found,
-                                    Label* const out,
-                                    std::function<Node*(Node*)> get_character) {
+void StringTrimAssembler::BuildLoop(
+    Variable* const var_index, Node* const end, int increment,
+    Label* const if_none_found, Label* const out,
+    const std::function<Node*(Node*)>& get_character) {
   Label loop(this, var_index);
   Goto(&loop);
   BIND(&loop);

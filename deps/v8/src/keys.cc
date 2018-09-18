@@ -5,7 +5,8 @@
 #include "src/keys.h"
 
 #include "src/api-arguments-inl.h"
-#include "src/elements.h"
+#include "src/elements-inl.h"
+#include "src/handles-inl.h"
 #include "src/heap/factory.h"
 #include "src/identity-map.h"
 #include "src/isolate-inl.h"
@@ -58,6 +59,10 @@ Handle<FixedArray> KeyAccumulator::GetKeys(GetKeysConversion convert) {
       OrderedHashSet::ConvertToKeysArray(isolate(), keys(), convert);
   DCHECK(ContainsOnlyValidKeys(result));
   return result;
+}
+
+Handle<OrderedHashSet> KeyAccumulator::keys() {
+  return Handle<OrderedHashSet>::cast(keys_);
 }
 
 void KeyAccumulator::AddKey(Object* key, AddKeyConversion convert) {
@@ -629,10 +634,10 @@ Handle<FixedArray> GetOwnEnumPropertyDictionaryKeys(Isolate* isolate,
                                                     Handle<JSObject> object,
                                                     T* raw_dictionary) {
   Handle<T> dictionary(raw_dictionary, isolate);
-  int length = dictionary->NumberOfEnumerableProperties();
-  if (length == 0) {
+  if (dictionary->NumberOfElements() == 0) {
     return isolate->factory()->empty_fixed_array();
   }
+  int length = dictionary->NumberOfEnumerableProperties();
   Handle<FixedArray> storage = isolate->factory()->NewFixedArray(length);
   T::CopyEnumKeysTo(isolate, dictionary, storage, mode, accumulator);
   return storage;

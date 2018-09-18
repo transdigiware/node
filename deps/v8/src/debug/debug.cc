@@ -7,7 +7,7 @@
 #include <memory>
 #include <unordered_set>
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/arguments.h"
 #include "src/assembler-inl.h"
 #include "src/base/platform/mutex.h"
@@ -29,7 +29,9 @@
 #include "src/isolate-inl.h"
 #include "src/log.h"
 #include "src/messages.h"
+#include "src/objects/api-callbacks-inl.h"
 #include "src/objects/debug-objects-inl.h"
+#include "src/objects/js-generator-inl.h"
 #include "src/objects/js-promise-inl.h"
 #include "src/snapshot/natives.h"
 #include "src/snapshot/snapshot.h"
@@ -278,15 +280,12 @@ void BreakIterator::SkipToPosition(int position) {
 void BreakIterator::SetDebugBreak() {
   DebugBreakType debug_break_type = GetDebugBreakType();
   if (debug_break_type == DEBUGGER_STATEMENT) return;
+  HandleScope scope(isolate());
   DCHECK(debug_break_type >= DEBUG_BREAK_SLOT);
-  BytecodeArray* bytecode_array = debug_info_->DebugBytecodeArray();
-  interpreter::Bytecode bytecode =
-      interpreter::Bytecodes::FromByte(bytecode_array->get(code_offset()));
-  if (interpreter::Bytecodes::IsDebugBreak(bytecode)) return;
-  interpreter::Bytecode debugbreak =
-      interpreter::Bytecodes::GetDebugBreak(bytecode);
-  bytecode_array->set(code_offset(),
-                      interpreter::Bytecodes::ToByte(debugbreak));
+  Handle<BytecodeArray> bytecode_array(debug_info_->DebugBytecodeArray(),
+                                       isolate());
+  interpreter::BytecodeArrayAccessor(bytecode_array, code_offset())
+      .ApplyDebugBreak();
 }
 
 void BreakIterator::ClearDebugBreak() {
@@ -322,6 +321,7 @@ BreakLocation BreakIterator::GetBreakLocation() {
                        generator_object_reg_index);
 }
 
+Isolate* BreakIterator::isolate() { return debug_info_->GetIsolate(); }
 
 void DebugFeatureTracker::Track(DebugFeatureTracker::Feature feature) {
   uint32_t mask = 1 << feature;
@@ -334,8 +334,6 @@ void DebugFeatureTracker::Track(DebugFeatureTracker::Feature feature) {
 
 // Threading support.
 void Debug::ThreadInit() {
-  thread_local_.break_count_ = 0;
-  thread_local_.break_id_ = 0;
   thread_local_.break_frame_id_ = StackFrame::NO_ID;
   thread_local_.last_step_action_ = StepNone;
   thread_local_.last_statement_position_ = kNoSourcePosition;
@@ -420,9 +418,6 @@ void Debug::Break(JavaScriptFrame* frame, Handle<JSFunction> break_target) {
 
   // Enter the debugger.
   DebugScope debug_scope(this);
-
-  // Postpone interrupt during breakpoint processing.
-  PostponeInterruptsScope postpone(isolate_);
   DisableBreak no_recursive_break(this);
 
   // Return if we fail to retrieve debug info.
@@ -1168,9 +1163,9 @@ void Debug::DeoptimizeFunction(Handle<SharedFunctionInfo> shared) {
   // inlining.
   isolate_->AbortConcurrentOptimization(BlockingBehavior::kBlock);
 
-  // Make sure we abort incremental marking.
-  isolate_->heap()->CollectAllGarbage(Heap::kMakeHeapIterableMask,
-                                      GarbageCollectionReason::kDebugger);
+  // TODO(mlippautz): Try to remove this call.
+  isolate_->heap()->PreciseCollectAllGarbage(
+      Heap::kNoGCFlags, GarbageCollectionReason::kDebugger);
 
   bool found_something = false;
   Code::OptimizedCodeIterator iterator(isolate_);
@@ -1545,7 +1540,7 @@ void Debug::FindDebugInfo(Handle<DebugInfo> debug_info,
   UNREACHABLE();
 }
 
-void Debug::ClearAllDebugInfos(DebugInfoClearFunction clear_function) {
+void Debug::ClearAllDebugInfos(const DebugInfoClearFunction& clear_function) {
   DebugInfoListNode* prev = nullptr;
   DebugInfoListNode* current = debug_info_list_;
   while (current != nullptr) {
@@ -1583,11 +1578,10 @@ void Debug::FreeDebugInfoListNode(DebugInfoListNode* prev,
     prev->set_next(node->next());
   }
 
-  // Pack function_identifier back into the
-  // SFI::function_identifier_or_debug_info field.
+  // Pack script back into the
+  // SFI::script_or_debug_info field.
   Handle<DebugInfo> debug_info(node->debug_info());
-  debug_info->shared()->set_function_identifier_or_debug_info(
-      debug_info->function_identifier());
+  debug_info->shared()->set_script_or_debug_info(debug_info->script());
 
   delete node;
 }
@@ -1632,12 +1626,12 @@ Handle<FixedArray> Debug::GetLoadedScripts() {
   isolate_->heap()->CollectAllGarbage(Heap::kFinalizeIncrementalMarkingMask,
                                       GarbageCollectionReason::kDebugger);
   Factory* factory = isolate_->factory();
-  if (!factory->script_list()->IsFixedArrayOfWeakCells()) {
+  if (!factory->script_list()->IsWeakArrayList()) {
     return factory->empty_fixed_array();
   }
-  Handle<FixedArrayOfWeakCells> array =
-      Handle<FixedArrayOfWeakCells>::cast(factory->script_list());
-  Handle<FixedArray> results = factory->NewFixedArray(array->Length());
+  Handle<WeakArrayList> array =
+      Handle<WeakArrayList>::cast(factory->script_list());
+  Handle<FixedArray> results = factory->NewFixedArray(array->length());
   int length = 0;
   {
     Script::Iterator iterator(isolate_);
@@ -1742,7 +1736,6 @@ void Debug::OnException(Handle<Object> exception, Handle<Object> promise) {
 
   DebugScope debug_scope(this);
   HandleScope scope(isolate_);
-  PostponeInterruptsScope postpone(isolate_);
   DisableBreak no_recursive_break(this);
 
   Handle<Context> native_context(isolate_->native_context());
@@ -1763,8 +1756,8 @@ void Debug::OnDebugBreak(Handle<FixedArray> break_points_hit) {
 #endif  // DEBUG
 
   if (!debug_delegate_) return;
+  DCHECK(in_debug_scope());
   HandleScope scope(isolate_);
-  PostponeInterruptsScope no_interrupts(isolate_);
   DisableBreak no_recursive_break(this);
 
   std::vector<int> inspector_break_points_hit;
@@ -1870,7 +1863,6 @@ void Debug::ProcessCompileEvent(bool has_compile_error, Handle<Script> script) {
   SuppressDebug while_processing(this);
   DebugScope debug_scope(this);
   HandleScope scope(isolate_);
-  PostponeInterruptsScope postpone(isolate_);
   DisableBreak no_recursive_break(this);
   AllowJavascriptExecution allow_script(isolate_);
   debug_delegate_->ScriptCompiled(ToApiHandle<debug::Script>(script),
@@ -2011,15 +2003,14 @@ void Debug::PrintBreakLocation() {
 
 DebugScope::DebugScope(Debug* debug)
     : debug_(debug),
-      prev_(debug->debugger_entry()),
-      no_termination_exceptons_(debug_->isolate_,
-                                StackGuard::TERMINATE_EXECUTION) {
+      prev_(reinterpret_cast<DebugScope*>(
+          base::Relaxed_Load(&debug->thread_local_.current_debug_scope_))),
+      no_interrupts_(debug_->isolate_) {
   // Link recursive debugger entry.
   base::Relaxed_Store(&debug_->thread_local_.current_debug_scope_,
                       reinterpret_cast<base::AtomicWord>(this));
 
-  // Store the previous break id, frame id and return value.
-  break_id_ = debug_->break_id();
+  // Store the previous frame id and return value.
   break_frame_id_ = debug_->break_frame_id();
 
   // Create the new break info. If there is no proper frames there is no break
@@ -2028,7 +2019,6 @@ DebugScope::DebugScope(Debug* debug)
   bool has_frames = !it.done();
   debug_->thread_local_.break_frame_id_ =
       has_frames ? it.frame()->id() : StackFrame::NO_ID;
-  debug_->SetNextBreakId();
 
   debug_->UpdateState();
 }
@@ -2041,7 +2031,6 @@ DebugScope::~DebugScope() {
 
   // Restore to the previous break state.
   debug_->thread_local_.break_frame_id_ = break_frame_id_;
-  debug_->thread_local_.break_id_ = break_id_;
 
   debug_->UpdateState();
 }
@@ -2133,6 +2122,8 @@ void Debug::ClearSideEffectChecks(Handle<DebugInfo> debug_info) {
   Handle<BytecodeArray> original(debug_info->OriginalBytecodeArray(), isolate_);
   for (interpreter::BytecodeArrayIterator it(debug_bytecode); !it.done();
        it.Advance()) {
+    // Restore from original. This may copy only the scaling prefix, which is
+    // correct, since we patch scaling prefixes to debug breaks if exists.
     debug_bytecode->set(it.current_offset(),
                         original->get(it.current_offset()));
   }
@@ -2185,16 +2176,59 @@ bool Debug::PerformSideEffectCheck(Handle<JSFunction> function,
   return false;
 }
 
-bool Debug::PerformSideEffectCheckForCallback(Handle<Object> callback_info) {
+Handle<Object> Debug::return_value_handle() {
+  return handle(thread_local_.return_value_, isolate_);
+}
+
+bool Debug::PerformSideEffectCheckForCallback(
+    Handle<Object> callback_info, Handle<Object> receiver,
+    Debug::AccessorKind accessor_kind) {
+  DCHECK_EQ(!receiver.is_null(), callback_info->IsAccessorInfo());
   DCHECK_EQ(isolate_->debug_execution_mode(), DebugInfo::kSideEffects);
   if (!callback_info.is_null() && callback_info->IsCallHandlerInfo() &&
       i::CallHandlerInfo::cast(*callback_info)->NextCallHasNoSideEffect()) {
     return true;
   }
   // TODO(7515): always pass a valid callback info object.
-  if (!callback_info.is_null() &&
-      DebugEvaluate::CallbackHasNoSideEffect(*callback_info)) {
-    return true;
+  if (!callback_info.is_null()) {
+    if (callback_info->IsAccessorInfo()) {
+      // List of whitelisted internal accessors can be found in accessors.h.
+      AccessorInfo* info = AccessorInfo::cast(*callback_info);
+      DCHECK_NE(kNotAccessor, accessor_kind);
+      switch (accessor_kind == kSetter ? info->setter_side_effect_type()
+                                       : info->getter_side_effect_type()) {
+        case SideEffectType::kHasNoSideEffect:
+          // We do not support setter accessors with no side effects, since
+          // calling set accessors go through a store bytecode. Store bytecodes
+          // are considered to cause side effects (to non-temporary objects).
+          DCHECK_NE(kSetter, accessor_kind);
+          return true;
+        case SideEffectType::kHasSideEffectToReceiver:
+          DCHECK(!receiver.is_null());
+          if (PerformSideEffectCheckForObject(receiver)) return true;
+          isolate_->OptionalRescheduleException(false);
+          return false;
+        case SideEffectType::kHasSideEffect:
+          break;
+      }
+      if (FLAG_trace_side_effect_free_debug_evaluate) {
+        PrintF("[debug-evaluate] API Callback '");
+        info->name()->ShortPrint();
+        PrintF("' may cause side effect.\n");
+      }
+    } else if (callback_info->IsInterceptorInfo()) {
+      InterceptorInfo* info = InterceptorInfo::cast(*callback_info);
+      if (info->has_no_side_effect()) return true;
+      if (FLAG_trace_side_effect_free_debug_evaluate) {
+        PrintF("[debug-evaluate] API Interceptor may cause side effect.\n");
+      }
+    } else if (callback_info->IsCallHandlerInfo()) {
+      CallHandlerInfo* info = CallHandlerInfo::cast(*callback_info);
+      if (info->IsSideEffectFreeCallHandlerInfo()) return true;
+      if (FLAG_trace_side_effect_free_debug_evaluate) {
+        PrintF("[debug-evaluate] API CallHandlerInfo may cause side effect.\n");
+      }
+    }
   }
   side_effect_check_failed_ = true;
   // Throw an uncatchable termination exception.
@@ -2231,11 +2265,14 @@ bool Debug::PerformSideEffectCheckAtBytecode(InterpretedFrame* frame) {
 bool Debug::PerformSideEffectCheckForObject(Handle<Object> object) {
   DCHECK_EQ(isolate_->debug_execution_mode(), DebugInfo::kSideEffects);
 
-  if (object->IsHeapObject()) {
-    if (temporary_objects_->HasObject(Handle<HeapObject>::cast(object))) {
-      return true;
-    }
+  // We expect no side-effects for primitives.
+  if (object->IsNumber()) return true;
+  if (object->IsName()) return true;
+
+  if (temporary_objects_->HasObject(Handle<HeapObject>::cast(object))) {
+    return true;
   }
+
   if (FLAG_trace_side_effect_free_debug_evaluate) {
     PrintF("[debug-evaluate] failed runtime side effect check.\n");
   }

@@ -4,7 +4,7 @@
 
 #include "src/profiler/heap-profiler.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/debug/debug.h"
 #include "src/heap/heap-inl.h"
 #include "src/profiler/allocation-tracker.h"
@@ -222,15 +222,14 @@ void HeapProfiler::ClearHeapObjectMap() {
 
 Heap* HeapProfiler::heap() const { return ids_->heap(); }
 
+Isolate* HeapProfiler::isolate() const { return heap()->isolate(); }
+
 void HeapProfiler::QueryObjects(Handle<Context> context,
                                 debug::QueryObjectPredicate* predicate,
                                 PersistentValueVector<v8::Object>* objects) {
   // We should return accurate information about live objects, so we need to
   // collect all garbage first.
-  heap()->CollectAllAvailableGarbage(
-      GarbageCollectionReason::kLowMemoryNotification);
-  heap()->CollectAllGarbage(Heap::kMakeHeapIterableMask,
-                            GarbageCollectionReason::kHeapProfiler);
+  heap()->CollectAllAvailableGarbage(GarbageCollectionReason::kHeapProfiler);
   HeapIterator heap_iterator(heap());
   HeapObject* heap_obj;
   while ((heap_obj = heap_iterator.next()) != nullptr) {

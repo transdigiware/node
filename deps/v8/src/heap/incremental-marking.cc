@@ -11,6 +11,7 @@
 #include "src/heap/gc-idle-time-handler.h"
 #include "src/heap/gc-tracer.h"
 #include "src/heap/heap-inl.h"
+#include "src/heap/incremental-marking-inl.h"
 #include "src/heap/mark-compact-inl.h"
 #include "src/heap/object-stats.h"
 #include "src/heap/objects-visiting-inl.h"
@@ -113,8 +114,9 @@ int IncrementalMarking::RecordWriteFromCode(HeapObject* obj, MaybeObject** slot,
   return 0;
 }
 
-void IncrementalMarking::RecordWriteIntoCodeSlow(Code* host, RelocInfo* rinfo,
-                                                 Object* value) {
+void IncrementalMarking::RecordWriteIntoCode(Code* host, RelocInfo* rinfo,
+                                             HeapObject* value) {
+  DCHECK(IsMarking());
   if (BaseRecordWrite(host, value)) {
     // Object is not going to be rescanned.  We need to record the slot.
     heap_->mark_compact_collector()->RecordRelocSlot(host, rinfo, value);
@@ -130,6 +132,9 @@ bool IncrementalMarking::WhiteToGreyAndPush(HeapObject* obj) {
 }
 
 void IncrementalMarking::MarkBlackAndPush(HeapObject* obj) {
+  // Marking left-trimmable fixed array black is unsafe because left-trimming
+  // re-pushes only grey arrays onto the marking worklist.
+  DCHECK(!obj->IsFixedArrayBase());
   // Color the object black and push it into the bailout deque.
   marking_state()->WhiteToGrey(obj);
   if (marking_state()->GreyToBlack(obj)) {
@@ -197,7 +202,10 @@ void IncrementalMarking::NotifyLeftTrimming(HeapObject* from, HeapObject* to) {
       DCHECK(success);
       USE(success);
     }
-    marking_worklist()->Push(to);
+    // Subsequent left-trimming will re-push only grey arrays.
+    // Ensure that this array is grey.
+    DCHECK(Marking::IsGrey<kAtomicity>(new_mark_bit));
+    marking_worklist()->PushBailout(to);
     RestartIfNotMarking();
   }
 }
@@ -450,13 +458,6 @@ void IncrementalMarking::FinishBlackAllocation() {
   }
 }
 
-void IncrementalMarking::AbortBlackAllocation() {
-  if (FLAG_trace_incremental_marking) {
-    heap()->isolate()->PrintWithTimestamp(
-        "[IncrementalMarking] Black allocation aborted\n");
-  }
-}
-
 void IncrementalMarking::MarkRoots() {
   DCHECK(!finalize_marking_completed_);
   DCHECK(IsMarking());
@@ -486,7 +487,6 @@ void IncrementalMarking::RetainMaps() {
   // - memory pressure (reduce_memory_footprint_),
   // - GC is requested by tests or dev-tools (abort_incremental_marking_).
   bool map_retaining_is_disabled = heap()->ShouldReduceMemory() ||
-                                   heap()->ShouldAbortIncrementalMarking() ||
                                    FLAG_retain_maps_for_n_gc == 0;
   WeakArrayList* retained_maps = heap()->retained_maps();
   int length = retained_maps->length();
@@ -497,10 +497,10 @@ void IncrementalMarking::RetainMaps() {
   for (int i = 0; i < length; i += 2) {
     MaybeObject* value = retained_maps->Get(i);
     HeapObject* map_heap_object;
-    if (!value->ToWeakHeapObject(&map_heap_object)) {
+    if (!value->GetHeapObjectIfWeak(&map_heap_object)) {
       continue;
     }
-    int age = Smi::ToInt(retained_maps->Get(i + 1)->ToSmi());
+    int age = Smi::ToInt(retained_maps->Get(i + 1)->cast<Smi>());
     int new_age;
     Map* map = Map::cast(map_heap_object);
     if (i >= number_of_disposed_maps && !map_retaining_is_disabled &&
@@ -928,10 +928,7 @@ double IncrementalMarking::AdvanceIncrementalMarking(
           heap_->MonotonicallyIncreasingTimeInMs() + kStepSizeInMs;
       if (!heap_->local_embedder_heap_tracer()
                ->ShouldFinalizeIncrementalMarking()) {
-        heap_->local_embedder_heap_tracer()->Trace(
-            wrapper_deadline, EmbedderHeapTracer::AdvanceTracingActions(
-                                  EmbedderHeapTracer::ForceCompletionAction::
-                                      DO_NOT_FORCE_COMPLETION));
+        heap_->local_embedder_heap_tracer()->Trace(wrapper_deadline);
       }
     } else {
       Step(step_size_in_bytes, completion_action, step_origin);

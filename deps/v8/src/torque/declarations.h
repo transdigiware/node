@@ -15,7 +15,7 @@ namespace v8 {
 namespace internal {
 namespace torque {
 
-static constexpr const char* const kFromConstexprMacroName = "from_constexpr";
+static constexpr const char* const kFromConstexprMacroName = "FromConstexpr";
 static constexpr const char* kTrueLabelName = "_True";
 static constexpr const char* kFalseLabelName = "_False";
 
@@ -108,12 +108,15 @@ class Declarations {
                           GenericDeclaration* generic);
 
   TypeVector GetCurrentSpecializationTypeNamesVector();
+  base::Optional<Generic*> GetCurrentGeneric();
 
   ScopeChain::Snapshot GetScopeChainSnapshot() { return chain_.TaskSnapshot(); }
 
   std::set<const Variable*> GetLiveVariables() {
     return chain_.GetLiveVariables();
   }
+
+  bool IsDeclaredInCurrentScope(const std::string& name);
 
   Statement* next_body() const { return next_body_; }
 

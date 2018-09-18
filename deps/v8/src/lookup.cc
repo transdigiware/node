@@ -256,7 +256,7 @@ namespace {
 
 bool IsTypedArrayFunctionInAnyContext(Isolate* isolate, JSReceiver* holder) {
   static uint32_t context_slots[] = {
-#define TYPED_ARRAY_CONTEXT_SLOTS(Type, type, TYPE, ctype, size) \
+#define TYPED_ARRAY_CONTEXT_SLOTS(Type, type, TYPE, ctype) \
   Context::TYPE##_ARRAY_FUN_INDEX,
 
       TYPED_ARRAYS(TYPED_ARRAY_CONTEXT_SLOTS)
@@ -398,7 +398,7 @@ void LookupIterator::PrepareForDataProperty(Handle<Object> value) {
   if (IsElement()) {
     ElementsKind kind = holder_obj->GetElementsKind();
     ElementsKind to = value->OptimalElementsKind();
-    if (IsHoleyOrDictionaryElementsKind(kind)) to = GetHoleyElementsKind(to);
+    if (IsHoleyElementsKind(kind)) to = GetHoleyElementsKind(to);
     to = GetMoreGeneralElementsKind(kind, to);
 
     if (kind != to) {
@@ -535,7 +535,7 @@ void LookupIterator::ReconfigureDataProperty(Handle<Object> value,
 // via a trap. Adding properties to primitive values is not observable.
 void LookupIterator::PrepareTransitionToDataProperty(
     Handle<JSReceiver> receiver, Handle<Object> value,
-    PropertyAttributes attributes, Object::StoreFromKeyed store_mode) {
+    PropertyAttributes attributes, StoreOrigin store_origin) {
   DCHECK_IMPLIES(receiver->IsJSProxy(), name()->IsPrivate());
   DCHECK(receiver.is_identical_to(GetStoreTarget<JSReceiver>()));
   if (state_ == TRANSITION) return;
@@ -589,7 +589,7 @@ void LookupIterator::PrepareTransitionToDataProperty(
 
   Handle<Map> transition =
       Map::TransitionToDataProperty(isolate_, map, name_, value, attributes,
-                                    kDefaultFieldConstness, store_mode);
+                                    kDefaultFieldConstness, store_origin);
   state_ = TRANSITION;
   transition_ = transition;
 

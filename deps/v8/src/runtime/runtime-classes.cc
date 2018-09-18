@@ -8,7 +8,7 @@
 #include <limits>
 
 #include "src/accessors.h"
-#include "src/arguments.h"
+#include "src/arguments-inl.h"
 #include "src/debug/debug.h"
 #include "src/elements.h"
 #include "src/isolate-inl.h"
@@ -731,9 +731,9 @@ MaybeHandle<Object> StoreToSuper(Isolate* isolate, Handle<JSObject> home_object,
                                             SuperMode::kStore, name, 0),
                              Object);
   LookupIterator it(receiver, name, holder);
-  MAYBE_RETURN(Object::SetSuperProperty(&it, value, language_mode,
-                                        Object::CERTAINLY_NOT_STORE_FROM_KEYED),
-               MaybeHandle<Object>());
+  MAYBE_RETURN(
+      Object::SetSuperProperty(&it, value, language_mode, StoreOrigin::kNamed),
+      MaybeHandle<Object>());
   return value;
 }
 
@@ -750,7 +750,7 @@ MaybeHandle<Object> StoreElementToSuper(Isolate* isolate,
       Object);
   LookupIterator it(isolate, receiver, index, holder);
   MAYBE_RETURN(Object::SetSuperProperty(&it, value, language_mode,
-                                        Object::MAY_BE_STORE_FROM_KEYED),
+                                        StoreOrigin::kMaybeKeyed),
                MaybeHandle<Object>());
   return value;
 }
@@ -831,20 +831,6 @@ RUNTIME_FUNCTION(Runtime_StoreKeyedToSuper_Sloppy) {
   RETURN_RESULT_OR_FAILURE(
       isolate, StoreKeyedToSuper(isolate, home_object, receiver, key, value,
                                  LanguageMode::kSloppy));
-}
-
-
-RUNTIME_FUNCTION(Runtime_GetSuperConstructor) {
-  SealHandleScope shs(isolate);
-  DCHECK_EQ(1, args.length());
-  CONVERT_ARG_CHECKED(JSFunction, active_function, 0);
-  Object* prototype = active_function->map()->prototype();
-  if (!prototype->IsConstructor()) {
-    HandleScope scope(isolate);
-    return ThrowNotSuperConstructor(isolate, handle(prototype, isolate),
-                                    handle(active_function, isolate));
-  }
-  return prototype;
 }
 
 }  // namespace internal

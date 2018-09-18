@@ -4,6 +4,7 @@
 
 #include "src/v8.h"
 
+#include "src/api-inl.h"
 #include "src/interpreter/interpreter-intrinsics.h"
 #include "src/objects-inl.h"
 #include "test/cctest/interpreter/interpreter-tester.h"
@@ -26,7 +27,7 @@ class InvokeIntrinsicHelper {
   template <class... A>
   Handle<Object> Invoke(A... args) {
     CHECK(IntrinsicsHelper::IsSupported(function_id_));
-    BytecodeArrayBuilder builder(zone_, sizeof...(args), 0, 0);
+    BytecodeArrayBuilder builder(zone_, sizeof...(args), 0, nullptr);
     RegisterList reg_list = InterpreterTester::NewRegisterList(
         builder.Receiver().index(), sizeof...(args));
     builder.CallRuntime(function_id_, reg_list).Return();
@@ -209,14 +210,14 @@ TEST(IntrinsicAsStubCall) {
 
   InvokeIntrinsicHelper has_property_helper(isolate, handles.main_zone(),
                                             Runtime::kInlineHasProperty);
-  CHECK_EQ(*factory->true_value(),
-           *has_property_helper.Invoke(
-               has_property_helper.NewObject("'x'"),
-               has_property_helper.NewObject("({ x: 20 })")));
-  CHECK_EQ(*factory->false_value(),
-           *has_property_helper.Invoke(
-               has_property_helper.NewObject("'y'"),
-               has_property_helper.NewObject("({ x: 20 })")));
+  CHECK_EQ(
+      *factory->true_value(),
+      *has_property_helper.Invoke(has_property_helper.NewObject("({ x: 20 })"),
+                                  has_property_helper.NewObject("'x'")));
+  CHECK_EQ(
+      *factory->false_value(),
+      *has_property_helper.Invoke(has_property_helper.NewObject("({ x: 20 })"),
+                                  has_property_helper.NewObject("'y'")));
 }
 
 }  // namespace interpreter
