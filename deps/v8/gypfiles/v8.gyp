@@ -583,6 +583,7 @@
         '../src/accessors.h',
         '../src/address-map.cc',
         '../src/address-map.h',
+        '../src/allocation-site-scopes-inl.h',
         '../src/allocation-site-scopes.h',
         '../src/allocation.cc',
         '../src/allocation.h',
@@ -629,6 +630,7 @@
         '../src/ast/modules.h',
         '../src/ast/prettyprinter.cc',
         '../src/ast/prettyprinter.h',
+        '../src/ast/scopes-inl.h',
         '../src/ast/scopes.cc',
         '../src/ast/scopes.h',
         '../src/ast/variables.cc',
@@ -666,7 +668,6 @@
         '../src/builtins/builtins-internal.cc',
         '../src/builtins/builtins-interpreter.cc',
         '../src/builtins/builtins-intl.cc',
-        '../src/builtins/builtins-intl.h',
         '../src/builtins/builtins-json.cc',
         '../src/builtins/builtins-math.cc',
         '../src/builtins/builtins-number.cc',
@@ -1988,7 +1989,6 @@
         }, {  # v8_enable_i18n_support==0
           'sources!': [
             '../src/builtins/builtins-intl.cc',
-            '../src/builtins/builtins-intl.h',
             '../src/char-predicates.cc',
             '../src/intl.cc',
             '../src/intl.h',
@@ -2044,6 +2044,7 @@
       },
       'sources': [
         '../src/base/adapters.h',
+        '../src/base/address-region.h',
         '../src/base/atomic-utils.h',
         '../src/base/atomicops.h',
         '../src/base/atomicops_internals_atomicword_compat.h',
@@ -2745,6 +2746,8 @@
         'heapobject_files': [
             '../src/objects.h',
             '../src/objects-inl.h',
+            '../src/objects/allocation-site-inl.h',
+            '../src/objects/allocation-site.h',
             '../src/objects/code-inl.h',
             '../src/objects/code.h',
             '../src/objects/data-handler.h',
